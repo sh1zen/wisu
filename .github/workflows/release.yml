@@ -1,0 +1,126 @@
+# .github/workflows/release.yml
+
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # This workflow runs when we push a tag like v0.1.1
+  
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Checkout code 
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body_path: CHANGELOG.md
+          draft: true       
+          prerelease: true  
+
+  build-and-upload:
+    name: Build and Upload Binaries
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset_name_suffix: "windows-x86_64.zip"
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            asset_name_suffix: "linux-x86_64.tar.gz"
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            asset_name_suffix: "macos-x86_64.tar.gz"
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            asset_name_suffix: "macos-arm64.tar.gz"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Install musl-tools for static Linux build
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare package
+        shell: bash
+        run: |
+          # Exit immediately if a command exits with a non-zero status.
+          set -e
+
+          PACKAGE_NAME="wisu-${{ matrix.asset_name_suffix }}"
+          STAGING_DIR="staging"
+          
+          mkdir "$STAGING_DIR"
+
+          # Determine the binary path and name based on OS
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            SOURCE_BINARY_PATH="target/${{ matrix.target }}/release/wisu.exe"
+          else
+            SOURCE_BINARY_PATH="target/${{ matrix.target }}/release/wisu"
+          fi
+          
+          # --- ADDED VERIFICATION ---
+          echo "Verifying binary exists at: ${SOURCE_BINARY_PATH}"
+          if [ ! -f "$SOURCE_BINARY_PATH" ]; then
+            echo "::error::Binary not found!"
+            exit 1
+          fi
+
+          cp "$SOURCE_BINARY_PATH" "$STAGING_DIR/"
+          
+          # We should also add a LICENSE file to the repository root
+          # For now, I'll make this step non-fatal
+          cp README.md "$STAGING_DIR/"
+          cp LICENSE "$STAGING_DIR/" || echo "LICENSE file not found, skipping."
+
+          echo "--- Contents of staging directory ---"
+          ls -R "$STAGING_DIR"
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            7z a "$PACKAGE_NAME" "./$STAGING_DIR/*"
+          else
+            tar -czf "$PACKAGE_NAME" -C "$STAGING_DIR" .
+          fi
+
+          echo "ASSET=$PACKAGE_NAME" >> $GITHUB_ENV
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ env.ASSET }}
+          asset_name: ${{ env.ASSET }}
+          asset_content_type: application/octet-stream
