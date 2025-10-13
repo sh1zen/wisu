@@ -6,6 +6,8 @@
 
 A fast, minimalist directory tree viewer, written in Rust, with a powerful interactive mode.
 
+![](assets/wisu-demo.gif)
+
 *An interactive overview of a project's structure using `wisu`.*
 
 ## Features

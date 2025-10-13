@@ -1,7 +1,7 @@
 [package]
 name = "wisu"
 version = "0.1.0"
-authors = ["Andra Frolli <dev.sh1zen@outlook.it>"]
+authors = ["Andrea Frolli <dev.sh1zen@outlook.it>"]
 edition = "2024"
 description = "A blazingly fast, minimalist directory tree viewer, written in Rust."
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ categories = ["command-line-utilities", "filesystem", "development-tools"]
 [dependencies]
 anyhow = "1.0.100"
 colored = "3.0.0"
-clap = { version = "4.5.48", features = ["derive"] }
+clap = { version = "4.5.49", features = ["derive"] }
 ignore = "0.4.22"
 lscolors = "0.20.0"
 url = "2.5.7"
