@@ -13,7 +13,7 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
     let start_time = Instant::now();
 
     // ─────────────── Data preparation ───────────────
-    let tree = tree::Tree::prepare(args)?;
+    let tree = tree::Tree::prepare(args, true)?;
 
     // ─────────────── Print ───────────────
     let (dir_count, file_count, size) = print_tree(tree, ls_colors, args)?;
@@ -37,10 +37,6 @@ pub fn print_tree(
     ls_colors: &LsColors,
     args: &Args,
 ) -> anyhow::Result<(usize, usize, u64)> {
-    let mut dir_count = 0usize;
-    let mut file_count = 0usize;
-    let mut last_per_level: Vec<bool> = Vec::new();
-
     // ───────────── ROOT ─────────────
     let metadata = fs::metadata(&args.path).ok();
     let root_is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(true);
@@ -85,51 +81,53 @@ pub fn print_tree(
     )?;
 
     // ───────────── ENTRIES ─────────────
-    for (i, entry) in tree.entries.iter().enumerate() {
-        let c_info = tree.tree_info.get(i).cloned().unwrap_or_default();
-        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+    let mut dir_count = 0usize;
+    let mut file_count = 0usize;
+    let mut path_stack: Vec<bool> = Vec::new();
 
-        if is_dir {
+    for (i, entry) in tree.entries.iter().enumerate() {
+        let c_info = &tree.tree_info[i];
+        let depth = c_info.depth;
+
+        // Aggiorna stack in base alla profondità
+        while path_stack.len() >= depth {
+            path_stack.pop();
+        }
+        path_stack.push(c_info.connector == "└──");
+
+        // Costruisci prefisso
+        let mut prefix = String::new();
+        for &is_last in &path_stack[..path_stack.len() - 1] {
+            prefix.push_str(if is_last { "    " } else { "│   " });
+        }
+
+        // Conteggi
+        if c_info.is_directory {
             dir_count += 1;
         } else {
             file_count += 1;
         }
 
-        // update last per level
-        if last_per_level.len() < c_info.depth {
-            last_per_level.resize(c_info.depth, false);
-        }
-        let is_last =
-            !tree.entries.iter().enumerate().skip(i + 1).any(|(_, e)| {
-                e.depth() == entry.depth() && e.path().parent() == entry.path().parent()
-            });
-        last_per_level[c_info.depth - 1] = is_last;
-
-        // build prefix
-        let mut prefix = String::new();
-        for d in 0..c_info.depth - 1 {
-            prefix.push_str(if last_per_level[d] { "    " } else { "│   " });
-        }
-
+        // Stampa
         let size_str = if args.info {
-            if is_dir {
+            if c_info.is_directory {
                 format!(
-                    " ( {}  {} dirs, {} files )",
+                    "  [ {}  {} dirs, {} files ]",
                     format::size(c_info.size.unwrap_or(0)),
                     c_info.dirs.unwrap_or(0),
                     c_info.files.unwrap_or(0)
                 )
             } else {
-                format!(" ( {} )", format::size(c_info.size.unwrap_or(0)))
+                format!("  [ {} ]", format::size(c_info.size.unwrap_or(0)))
             }
-        } else if args.size && !is_dir {
+        } else if args.size && !c_info.is_directory {
             c_info.size.map(|s| format!(" ({})", format::size(s))).unwrap_or_default()
         } else {
             String::new()
         };
 
         let styled_name = style_entry_name(entry.path(), ls_colors);
-        let final_name = if args.hyperlinks && !is_dir {
+        let final_name = if args.hyperlinks && !c_info.is_directory {
             make_hyperlink(entry.path(), styled_name)
         } else {
             styled_name.to_string()
@@ -138,10 +136,10 @@ pub fn print_tree(
         writeln!(
             io::stdout(),
             "{}{}{} {}{}{}",
-            c_info.permissions.unwrap_or_default().dimmed(),
+            c_info.permissions.clone().unwrap_or_default().dimmed(),
             prefix,
             c_info.connector,
-            c_info.icon.unwrap_or_default(),
+            c_info.icon.clone().unwrap_or_default(),
             final_name,
             size_str.dimmed()
         )?;

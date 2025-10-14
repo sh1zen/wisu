@@ -41,12 +41,13 @@ pub fn export(args: &Args) -> Result<()> {
     let start = std::time::Instant::now();
 
     // ───────────── Data Preparation ─────────────
-    let tree = Tree::prepare(args)?;
+    let tree = Tree::prepare(args, true)?;
 
     let format = OutputFormat::from_str(&args.out).ok_or_else(|| {
         anyhow::anyhow!("Invalid format: {}", args.out.clone().unwrap_or_default())
     })?;
-    let out_path = args.out.as_ref().unwrap();
+
+    let out_path = format!("export.{}", args.out.as_ref().unwrap());
 
     match format {
         OutputFormat::Csv => {

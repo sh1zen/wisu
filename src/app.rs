@@ -14,7 +14,7 @@ pub struct Args {
     pub interactive: bool,
 
     /// Export file path
-    #[arg(long, short = 'o', default_value = None, value_parser = clap::builder::PossibleValuesParser::new(["json", "csv", "xml"]))]
+    #[arg(short = 'o', default_value = None, value_parser = clap::builder::PossibleValuesParser::new(["json", "csv", "xml"]))]
     pub out: Option<String>,
 
     /// The path to the directory to explore/display. Defaults to the current directory.

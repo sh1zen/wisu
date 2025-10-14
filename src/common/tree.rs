@@ -1,9 +1,11 @@
 use crate::app::Args;
+use crate::common::plugins::apply_filter;
 use crate::common::{icons, sort};
 use crate::utils::dir;
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Structure containing useful information for printing each entry
 #[derive(Debug, Clone)]
@@ -34,7 +36,6 @@ impl Default for TreeEntry {
         }
     }
 }
-
 
 /// Tree of files and directories with information for printing
 #[derive(Debug)]
@@ -175,7 +176,7 @@ impl Tree {
     }
 
     /// Prepares the tree from Args (scans files and directories)
-    pub fn prepare(args: &Args) -> anyhow::Result<Self> {
+    pub fn prepare(args: &Args, show_progress: bool) -> anyhow::Result<Self> {
         let mut builder = WalkBuilder::new(&args.path);
         builder.hidden(!args.all).git_ignore(args.gitignore);
 
@@ -183,33 +184,39 @@ impl Tree {
             builder.max_depth(Some(level));
         }
 
-        let spinner = ProgressBar::new_spinner();
-        spinner.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} Scanning: {msg}")
-                .unwrap()
-                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
-        );
-        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+        // helper per creare spinner
+        let make_spinner = |msg: &str| {
+            let spinner = ProgressBar::new_spinner();
+            spinner.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} {msg}")
+                    .unwrap()
+                    .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+            );
+            spinner.set_message(msg.to_string());
+            spinner.enable_steady_tick(Duration::from_millis(80));
+            spinner
+        };
+
+        let spinner = if show_progress { make_spinner("Scanning:") } else { ProgressBar::hidden() };
 
         let mut entries = Vec::new();
         for entry in builder.build().filter_map(Result::ok) {
             if entry.depth() == 0 {
                 continue;
             }
-            spinner.set_message(format!("{}", entry.path().display()));
+            if show_progress {
+                spinner.set_message(format!("Scanning: {}", entry.path().display()));
+            }
             entries.push(entry);
         }
-        spinner.finish_with_message("Completed ✅");
 
-        let spinner = ProgressBar::new_spinner();
-        spinner.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} Computing: {msg}")
-                .unwrap()
-                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
-        );
-        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+        if show_progress {
+            spinner.finish_with_message("Completed ✅");
+        }
+
+        let spinner =
+            if show_progress { make_spinner("Computing:") } else { ProgressBar::hidden() };
 
         if args.files_only {
             sort::sort_entries(&mut entries, &args.to_sort_options())
@@ -219,10 +226,12 @@ impl Tree {
 
         let tree = Self::build(entries, args);
 
-        spinner.finish_with_message("Completed ✅");
-        println!("\n");
+        if show_progress {
+            spinner.finish_with_message("Completed ✅");
+            println!("\n");
+        }
 
-        Ok(tree)
+        Ok(apply_filter("tree_entries", tree))
     }
 
     /// Returns all entries at a given depth along with their info

@@ -261,7 +261,7 @@ impl TuiApp {
 
         let mut args_clone = args.clone();
         args_clone.path = canonical.clone();
-        let tree = Tree::prepare(&args_clone)?;
+        let tree = Tree::prepare(&args_clone, false)?;
 
         self.entries = tree.tree_info
             .into_iter()
@@ -361,14 +361,14 @@ impl TuiApp {
                     if let (Some(size), Some(files), Some(dirs)) =
                         (entry.data.size, entry.data.files, entry.data.dirs)
                     {
-                        info_text = format!("[{} bytes, {} files, {} dirs]", format::size(size), files, dirs);
+                        info_text = format!("[{}, {} files, {} dirs]", format::size(size), files, dirs);
                     }
                 } else if let Some(size) = entry.data.size {
-                    info_text = format::size(size);
+                    info_text =  format!("[{}]", format::size(size));
                 }
             } else if args.size && !entry.data.is_directory {
                 if let Some(size) = entry.data.size {
-                    info_text = format::size(size);
+                    info_text =  format!("[{}]", format::size(size));
                 }
             }
 
@@ -418,7 +418,7 @@ impl TuiApp {
 
 /// Run the TUI application
 pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
-    let entries = Tree::prepare(args)?.tree_info;
+    let entries = Tree::prepare(args, true)?.tree_info;
     let current_dir = env::current_dir()?;
 
     enable_raw_mode()?;
@@ -427,6 +427,10 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+
+    while event::poll(std::time::Duration::from_millis(50))? {
+        let _ = event::read()?; // scarta tutto finché il buffer è vuoto
+    }
 
     let mut app = TuiApp::new(entries, current_dir);
     app.apply_initial_expansion(args.expand_level);
@@ -481,7 +485,7 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
             KeyCode::Char('q') => break ExitAction::None,
             KeyCode::Char('r') => {
                 terminal.clear()?;
-                let new_entries = Tree::prepare(args)?.tree_info;
+                let new_entries = Tree::prepare(args, false)?.tree_info;
                 app = TuiApp::new(new_entries, app.current_dir.clone());
                 app.apply_initial_expansion(args.expand_level);
                 terminal.clear()?;

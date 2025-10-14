@@ -15,14 +15,17 @@ A fast, minimalist directory tree viewer, written in Rust, with a powerful inter
   - **Classic and interactive modes:** Use `wisu` for a classic `tree`-like view, or launch `wisu -i` for a fully interactive terminal Interface.
   - **Theme-aware coloring:** Respects your system's `LS_COLORS` environment variable for fully customizable file and directory colors.
   - **Rich information display (optional):**
-      - Display file-specific icons with `--icons` (requires a Nerd Font).
+      - Display file-specific icons with `--icons` (requires Emoji support).
       - Show file permissions with `-p`.
       - Show file sizes with `-s`.
       - Show file info with `-x`. 
-      - **Git Integration:** Show file statuses (`Modified`, `New`, `Untracked`, etc.) directly in the tree with the `-G` flag.
+      - **Export:** Export path to (`CSV`, `XML`, `JSON`) with `-o` flag.
   - **Smart filtering:**
       - Respects your `.gitignore` files with the `-g` flag.
       - Control recursion depth (`-L`) or show only directories (`-d`).
+      - Control max files per dir (`-F`), setting it to 0 displays only directories.
+  - **Plugin support:**
+      - You can customize wisu behaviour using custom filtering with **apply_filter(hook, Fn);** 
 
 ## Installation
 
@@ -54,7 +57,7 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 | `-a`, `--all`            | List all files and directories, including hidden ones.                                                    |
 | `-d`, `--dirs-only`      | List directories only, ignoring all files.                                                                |
 | `-F`, `--files <NUM>`    | List max NUM files per directory.                                                                         |
-| `--export <TYPE>`        | Export to file. TYPE: (`cxv`, `xml`, `json`)                                                              |
+| `-o <TYPE>`,             | Export to file. TYPE: (`cxv`, `xml`, `json`)                                                              |
 | `-g`, `--gitignore`      | Respect `.gitignore` and other standard ignore files.                                                     |
 | `--icons`                | Display file-specific icons using emoji.                                                                  |
 | `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only)                                             |
