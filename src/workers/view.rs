@@ -95,7 +95,6 @@ pub fn print_tree(
         }
         path_stack.push(c_info.connector == "└──");
 
-        // Costruisci prefisso
         let mut prefix = String::new();
         for &is_last in &path_stack[..path_stack.len() - 1] {
             prefix.push_str(if is_last { "    " } else { "│   " });
@@ -108,7 +107,6 @@ pub fn print_tree(
             file_count += 1;
         }
 
-        // Stampa
         let size_str = if args.info {
             if c_info.is_directory {
                 format!(
@@ -164,7 +162,7 @@ fn style_entry_name(path: &std::path::Path, ls_colors: &LsColors) -> colored::Co
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             match ext.to_lowercase().as_str() {
                 "rs" | "c" | "cpp" | "py" | "php" | "html" | "css" | "js" => name.cyan(), // source files
-                "zip" | "tar" | "gz" | "rar" | "7zip" => name.yellow(),                   // archives
+                "zip" | "tar" | "gz" | "rar" | "7zip" => name.yellow(), // archives
                 "psd" | "svg" | "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" => name.magenta(), // images
                 "mp4" | "mkv" | "avi" | "mov" | "flv" | "wmv" => name.purple(), // videos
                 "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pps" | "ppsx" => {
