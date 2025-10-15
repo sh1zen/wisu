@@ -42,15 +42,13 @@ impl Default for TreeEntry {
 pub struct Tree {
     pub entries: Vec<ignore::DirEntry>,
     pub tree_info: Vec<TreeEntry>,
-    pub max_depth: usize,
-    depth_index: HashMap<usize, Vec<usize>>, // pre-index by depth
+    depth_index: HashMap<usize, Vec<usize>>,
 }
 
 impl Tree {
     /// Builds the tree from DirEntry and Args
     fn build(entries: Vec<ignore::DirEntry>, args: &Args) -> Self {
         let mut infos: HashMap<std::path::PathBuf, TreeEntry> = HashMap::new();
-        let mut max_depth = 0;
 
         // Root
         infos.insert(args.path.canonicalize().unwrap_or(args.path.clone()), TreeEntry::default());
@@ -61,20 +59,18 @@ impl Tree {
             let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
             let size = if !is_dir { entry.metadata().map(|m| m.len()).unwrap_or(0) } else { 0 };
 
-            infos.entry(path.to_path_buf()).or_insert_with(|| TreeEntry {
-                size: if size > 0 { Some(size) } else { None },
-                dirs: Some(0),
-                files: Some(0),
-                ..Default::default()
-            });
+            // Always create an entry, even for empty dirs
+            let mut info = infos.entry(path.to_path_buf()).or_insert_with(TreeEntry::default);
+            info.is_directory = is_dir;
+            info.dirs.get_or_insert(0);
+            info.files.get_or_insert(0);
 
             if !is_dir {
-                let info = infos.get_mut(path).unwrap();
                 info.files = Some(1);
                 info.size = Some(size);
+            } else if info.size.is_none() {
+                info.size = Some(0);
             }
-
-            max_depth = max_depth.max(entry.depth());
         }
 
         // Propagation upward
@@ -172,7 +168,7 @@ impl Tree {
             depth_index.entry(depth).or_default().push(i);
         }
 
-        Tree { entries: filtered_entries, tree_info, max_depth, depth_index }
+        Tree { entries: filtered_entries, tree_info, depth_index }
     }
 
     /// Prepares the tree from Args (scans files and directories)
@@ -180,9 +176,8 @@ impl Tree {
         let mut builder = WalkBuilder::new(&args.path);
         builder.hidden(!args.all).git_ignore(args.gitignore);
 
-        if let Some(level) = args.level {
-            builder.max_depth(Some(level));
-        }
+        // set max depth
+        builder.max_depth(args.level);
 
         // helper per creare spinner
         let make_spinner = |msg: &str| {

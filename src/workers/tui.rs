@@ -1,10 +1,7 @@
-use std::env;
-use std::io::{stdout, Stdout};
-use std::path::PathBuf;
-use std::process::Command;
 use crate::app::Args;
 use crate::common::tree::{Tree, TreeEntry};
 use crate::utils::dir::canonicalize_path;
+use crate::utils::format;
 use lscolors::{Color as LsColor, LsColors, Style as LsStyle};
 use ratatui::crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, KeyEventKind, MouseEventKind,
@@ -15,14 +12,17 @@ use ratatui::crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout},
+    backend::{Backend, CrosstermBackend}, layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
-    Frame, Terminal,
+    Frame,
+    Terminal,
 };
-use crate::utils::format;
+use std::io::{stdout, Stdout};
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
 
 /// TUI modes: normal navigation vs search mode
 #[derive(Clone, Copy, PartialEq)]
@@ -41,24 +41,31 @@ struct TuiEntry {
 /// Represents what to do when exiting the TUI
 enum ExitAction {
     None,
-    OpenFile(PathBuf),
     PrintPath(PathBuf),
 }
 
 /// Main TUI application state
 pub struct TuiApp {
-    entries: Vec<TuiEntry>,        // All entries in the current view
-    filtered_indices: Vec<usize>,  // Indices of currently visible entries
-    list_state: ListState,         // Tracks selection in the list
-    mode: Mode,                    // Current mode (Normal/Search)
-    search_query: String,          // Search query string
-    backup_indices: Vec<usize>,    // Backup of indices before search
-    current_dir: PathBuf,          // Currently displayed directory
+    // All entries in the current view
+    entries: Vec<TuiEntry>,
+    // Indices of currently visible entries
+    filtered_indices: Vec<usize>,
+    // Tracks selection in the list
+    list_state: ListState,
+    // Current mode (Normal/Search)
+    mode: Mode,
+    // Search query string
+    search_query: String,
+    // Backup of indices before search
+    backup_indices: Vec<usize>,
+    // Currently displayed directory
+    current_dir: PathBuf,
+    root_dir: PathBuf,
 }
 
 impl TuiApp {
-    /// Create a new TUI application from a list of tree entries
     pub fn new(entries: Vec<TreeEntry>, current_dir: impl Into<PathBuf>) -> Self {
+        let current_dir = current_dir.into();
         let entries: Vec<TuiEntry> =
             entries.into_iter().map(|e| TuiEntry { data: e, expanded: false }).collect();
 
@@ -69,14 +76,13 @@ impl TuiApp {
             mode: Mode::Normal,
             search_query: String::new(),
             backup_indices: Vec::new(),
-            current_dir: current_dir.into(),
+            current_dir: current_dir.clone(),
+            root_dir: current_dir, // <- qui impostiamo il root
         };
-
         app.rebuild_visible_list();
         app
     }
 
-    /// Optionally expand directories up to a certain level initially
     pub fn apply_initial_expansion(&mut self, expand_level: Option<usize>) {
         if let Some(level) = expand_level {
             for entry in &mut self.entries {
@@ -88,58 +94,55 @@ impl TuiApp {
         }
     }
 
-    /// Recalculate which entries are visible based on expansion state
-    fn rebuild_visible_list(&mut self) {
+    /// Ricostruisce la lista dei nodi visibili in base alla directory corrente
+    pub fn rebuild_visible_list(&mut self) {
         self.filtered_indices.clear();
-        self.filtered_indices.reserve(self.entries.len());
-
         let mut parent_expanded_stack = Vec::with_capacity(16);
 
         for (idx, entry) in self.entries.iter().enumerate() {
-            let target_depth = entry.data.depth.saturating_sub(1);
-            parent_expanded_stack.truncate(target_depth);
-
-            // Entry is visible if root or all parent directories are expanded
-            let visible = entry.data.depth == 0 || parent_expanded_stack.iter().all(|&e| e);
-
-            if visible {
+            // ".." è sempre visibile se non siamo alla root
+            if entry.data.icon.as_deref() == Some("..") {
                 self.filtered_indices.push(idx);
+                continue;
             }
 
-            if entry.data.is_directory && entry.data.depth > 0 {
-                parent_expanded_stack.push(entry.expanded);
+            if self.current_dir == self.root_dir {
+                // Logica albero completo con espansioni
+                let target_depth = entry.data.depth.saturating_sub(1);
+                parent_expanded_stack.truncate(target_depth);
+                let visible = entry.data.depth == 0 || parent_expanded_stack.iter().all(|&e| e);
+                if visible {
+                    self.filtered_indices.push(idx);
+                }
+                if entry.data.is_directory && entry.data.depth > 0 {
+                    parent_expanded_stack.push(entry.expanded);
+                }
+            } else {
+                // Subdir: mostra solo figli diretti della current_dir
+                if entry.data.path.parent().map(|p| p == self.current_dir).unwrap_or(false) {
+                    self.filtered_indices.push(idx);
+                }
             }
         }
-
-        // Select first entry if nothing is selected
-        if self.list_state.selected().is_none() && !self.filtered_indices.is_empty() {
-            self.list_state.select(Some(0));
-        }
+        self.list_state.select(Some(0));
     }
 
-    /// Expand/collapse a directory entry
     pub fn toggle_expansion(&mut self) {
         let Some(sel_idx) = self.list_state.selected() else { return };
         let Some(&entry_idx) = self.filtered_indices.get(sel_idx) else { return };
-
         if !self.entries[entry_idx].data.is_directory {
             return;
         }
 
-        // Save path before mutating
         let path = self.entries[entry_idx].data.path.clone();
-
-        // Toggle expansion
         self.entries[entry_idx].expanded = !self.entries[entry_idx].expanded;
-
         self.rebuild_visible_list();
 
-        // Restore selection position after rebuild
-        let new_pos = self.filtered_indices
+        let new_pos = self
+            .filtered_indices
             .iter()
             .position(|&i| self.entries[i].data.path == path)
             .unwrap_or_else(|| sel_idx.min(self.filtered_indices.len().saturating_sub(1)));
-
         self.list_state.select(Some(new_pos));
     }
 
@@ -148,7 +151,9 @@ impl TuiApp {
         if self.filtered_indices.is_empty() {
             return;
         }
-        let next = self.list_state.selected()
+        let next = self
+            .list_state
+            .selected()
             .map(|i| if i >= self.filtered_indices.len() - 1 { 0 } else { i + 1 })
             .unwrap_or(0);
         self.list_state.select(Some(next));
@@ -167,7 +172,6 @@ impl TuiApp {
         self.list_state.select(Some(prev));
     }
 
-    /// Enter search mode
     fn start_search(&mut self) {
         if self.mode == Mode::Normal {
             self.backup_indices = self.filtered_indices.clone();
@@ -176,12 +180,10 @@ impl TuiApp {
         self.search_query.clear();
     }
 
-    /// Exit search mode and restore previous list
     fn exit_search(&mut self) {
         if self.mode != Mode::Search {
             return;
         }
-
         std::mem::swap(&mut self.filtered_indices, &mut self.backup_indices);
         self.backup_indices.clear();
         self.mode = Mode::Normal;
@@ -199,18 +201,14 @@ impl TuiApp {
         }
     }
 
-    /// Filter entries based on the current search query
     fn apply_search_filter(&mut self) {
         let query = self.search_query.to_lowercase();
-
         if query.is_empty() {
             self.rebuild_visible_list();
             return;
         }
 
-        // Collapse all directories
         self.entries.iter_mut().for_each(|e| e.expanded = false);
-
         self.filtered_indices.clear();
 
         for idx in 0..self.entries.len() {
@@ -220,18 +218,13 @@ impl TuiApp {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
-
             if name.contains(&query) {
                 self.filtered_indices.push(idx);
-
-                // Expand parent directories to make match visible
                 let mut depth = self.entries[idx].data.depth;
                 let mut parent_idx = idx;
-
                 while depth > 0 {
-                    if let Some(p_idx) = (0..parent_idx)
-                        .rev()
-                        .find(|&i| self.entries[i].data.depth == depth - 1)
+                    if let Some(p_idx) =
+                        (0..parent_idx).rev().find(|&i| self.entries[i].data.depth == depth - 1)
                     {
                         parent_idx = p_idx;
                         self.entries[parent_idx].expanded = true;
@@ -242,7 +235,6 @@ impl TuiApp {
                 }
             }
         }
-
         self.list_state.select(if self.filtered_indices.is_empty() { None } else { Some(0) });
     }
 
@@ -254,43 +246,53 @@ impl TuiApp {
             .and_then(|&idx| self.entries.get(idx))
     }
 
-    /// Change the current directory and rebuild the tree
-    pub fn change_directory(&mut self, new_dir: PathBuf, args: &Args) -> anyhow::Result<()> {
-        let canonical = canonicalize_path(&new_dir);
-        self.current_dir = canonical.clone();
+    pub fn enter_directory(&mut self, entry_idx: usize) {
+        let entry = &self.entries[entry_idx];
+        if !entry.data.is_directory {
+            return;
+        }
 
-        let mut args_clone = args.clone();
-        args_clone.path = canonical.clone();
-        let tree = Tree::prepare(&args_clone, false)?;
+        self.current_dir = entry.data.path.clone();
 
-        self.entries = tree.tree_info
-            .into_iter()
-            .map(|e| TuiEntry { data: e, expanded: false })
-            .collect();
+        // Rimuovi eventuale ".." precedente
+        self.entries.retain(|e| e.data.icon.as_deref() != Some(".."));
 
-        // Add ".." entry if not in initial path
-        let initial_dir = &args.path;
-        if &canonical != initial_dir && canonical.parent().is_some() {
-            let back_entry = TuiEntry {
-                data: TreeEntry {
-                    path: canonical.join(".."),
-                    depth: 0,
-                    is_directory: true,
-                    size: None,
-                    files: None,
-                    dirs: None,
-                    icon: Some("..".to_string()),
-                    permissions: None,
-                    connector: String::new(),
-                },
-                expanded: false,
-            };
-            self.entries.insert(0, back_entry);
+        // Aggiungi ".." solo se non siamo nella root base
+        if self.current_dir != self.root_dir {
+            if let Some(parent) = self.current_dir.parent() {
+                let back_entry = TuiEntry {
+                    data: TreeEntry {
+                        path: parent.to_path_buf(),
+                        depth: 0,
+                        is_directory: true,
+                        size: None,
+                        files: None,
+                        dirs: None,
+                        icon: Some("..".to_string()),
+                        permissions: None,
+                        connector: String::new(),
+                    },
+                    expanded: false,
+                };
+                self.entries.insert(0, back_entry);
+            }
         }
 
         self.rebuild_visible_list();
-        self.list_state.select(Some(0));
-        Ok(())
+    }
+
+    pub fn go_up(&mut self) {
+        // Se siamo nella root base, non salire sopra
+        if self.current_dir == self.root_dir {
+            return;
+        }
+
+        // Trova l’indice del nodo ".." e entra nella directory superiore
+        if let Some(parent) = self.current_dir.parent() {
+            if let Some(back_idx) = self.entries.iter().position(|e| e.data.path == parent) {
+                self.enter_directory(back_idx);
+            }
+        }
     }
 
     /// Render the TUI
@@ -343,13 +345,9 @@ impl TuiApp {
                 spans.push(Span::styled(format!("{icon} "), Style::default().fg(Color::Gray)));
             }
 
-            let name = entry.data.path.file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
+            let name = entry.data.path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
 
-            let style = ls_colors.style_for_path(&entry.data.path)
-                .cloned()
-                .unwrap_or_default();
+            let style = ls_colors.style_for_path(&entry.data.path).cloned().unwrap_or_default();
 
             spans.push(Span::styled(name.to_string(), convert_ls_style(style)));
 
@@ -361,14 +359,15 @@ impl TuiApp {
                     if let (Some(size), Some(files), Some(dirs)) =
                         (entry.data.size, entry.data.files, entry.data.dirs)
                     {
-                        info_text = format!("[{}, {} files, {} dirs]", format::size(size), files, dirs);
+                        info_text =
+                            format!("[{}, {} files, {} dirs]", format::size(size), files, dirs);
                     }
                 } else if let Some(size) = entry.data.size {
-                    info_text =  format!("[{}]", format::size(size));
+                    info_text = format!("[{}]", format::size(size));
                 }
             } else if args.size && !entry.data.is_directory {
                 if let Some(size) = entry.data.size {
-                    info_text =  format!("[{}]", format::size(size));
+                    info_text = format!("[{}]", format::size(size));
                 }
             }
 
@@ -392,10 +391,7 @@ impl TuiApp {
         let list = List::new(list_items)
             .block(Block::default().title("Directory Tree").borders(Borders::ALL))
             .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("→ ");
 
@@ -419,7 +415,6 @@ impl TuiApp {
 /// Run the TUI application
 pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
     let entries = Tree::prepare(args, true)?.tree_info;
-    let current_dir = env::current_dir()?;
 
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -429,17 +424,16 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
     terminal.clear()?;
 
     while event::poll(std::time::Duration::from_millis(50))? {
-        let _ = event::read()?; // scarta tutto finché il buffer è vuoto
+        let _ = event::read()?;
     }
 
-    let mut app = TuiApp::new(entries, current_dir);
+    let mut app = TuiApp::new(entries, args.path.clone());
     app.apply_initial_expansion(args.expand_level);
 
     let exit_action = loop {
         terminal.draw(|f| app.render::<CrosstermBackend<Stdout>>(f, args, ls_colors))?;
 
         let Event::Key(key) = event::read()? else {
-            // Handle mouse scroll
             if let Event::Mouse(mouse) = event::read()? {
                 match mouse.kind {
                     MouseEventKind::ScrollUp => app.move_selection_up(),
@@ -454,7 +448,6 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
             continue;
         }
 
-        // Handle search mode separately
         if app.mode == Mode::Search && !key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Backspace => {
@@ -471,7 +464,7 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
                         if entry.data.is_directory {
                             app.toggle_expansion();
                         } else {
-                            break ExitAction::OpenFile(entry.data.path.clone());
+                            let _ = open_file(&entry.data.path);
                         }
                     }
                 }
@@ -480,12 +473,11 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
             continue;
         }
 
-        // Handle normal mode keybindings
         match key.code {
             KeyCode::Char('q') => break ExitAction::None,
             KeyCode::Char('r') => {
                 terminal.clear()?;
-                let new_entries = Tree::prepare(args, false)?.tree_info;
+                let new_entries = Tree::prepare(args, true)?.tree_info;
                 app = TuiApp::new(new_entries, app.current_dir.clone());
                 app.apply_initial_expansion(args.expand_level);
                 terminal.clear()?;
@@ -497,37 +489,42 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
                 }
             }
             KeyCode::Right | KeyCode::Left | KeyCode::Enter => {
-                if let Some(entry) = app.get_current_entry() {
-                    let name = entry.data.path.file_name()
+                if let Some(sel_idx) = app.list_state.selected() {
+                    let entry_idx = app.filtered_indices[sel_idx];
+                    let entry = &app.entries[entry_idx];
+                    let name = entry
+                        .data
+                        .path
+                        .file_name()
                         .map(|n| n.to_string_lossy())
                         .unwrap_or_default();
 
                     if name == ".." {
-                        if let Some(parent) = app.current_dir.parent() {
-                            app.change_directory(parent.to_path_buf(), args)?;
-                        }
+                        app.go_up();
                     } else if entry.data.is_directory {
                         app.toggle_expansion();
                     } else {
-                        break ExitAction::OpenFile(entry.data.path.clone());
+                        let _ = open_file(&entry.data.path);
                     }
                 }
             }
             KeyCode::Tab => {
-                if let Some(entry) = app.get_current_entry() {
-                    let name = entry.data.path.file_name()
+                if let Some(sel_idx) = app.list_state.selected() {
+                    let entry_idx = app.filtered_indices[sel_idx];
+                    let entry = &app.entries[entry_idx];
+                    let name = entry
+                        .data
+                        .path
+                        .file_name()
                         .map(|n| n.to_string_lossy())
                         .unwrap_or_default();
 
                     if name == ".." {
-                        if let Some(parent) = app.current_dir.parent() {
-                            app.change_directory(parent.to_path_buf(), args)?;
-                        }
+                        app.go_up();
                     } else if entry.data.is_directory {
-                        let new_dir = std::fs::canonicalize(&entry.data.path)
-                            .unwrap_or_else(|_| entry.data.path.clone());
-                        app.change_directory(new_dir, args)?;
+                        app.enter_directory(entry_idx);
                     }
+
                     terminal.clear()?;
                     app.rebuild_visible_list();
                 }
@@ -537,12 +534,23 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
                     let dir = if entry.data.is_directory {
                         entry.data.path.clone()
                     } else {
-                        entry.data.path.parent()
-                            .unwrap_or(&app.current_dir)
-                            .to_path_buf()
+                        entry.data.path.parent().unwrap_or(&app.current_dir).to_path_buf()
                     };
+
+                    // Esci temporaneamente dalla raw mode e dallo schermo alternativo
+                    disable_raw_mode()?;
+                    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+                    terminal.show_cursor()?;
                     terminal.clear()?;
+
+                    // Apri il terminale esterno
                     open_terminal(&dir)?;
+
+                    // Rientra nella modalità TUI
+                    enable_raw_mode()?;
+                    execute!(terminal.backend_mut(), EnterAlternateScreen, EnableMouseCapture)?;
+                    terminal.clear()?;
+                    app.rebuild_visible_list();
                 }
             }
             KeyCode::Up => app.move_selection_up(),
@@ -561,18 +569,18 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
 
 /// Open a terminal in the specified directory
 #[inline]
-fn open_terminal(dir: &std::path::Path) -> anyhow::Result<()> {
+fn open_terminal(dir: &Path) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd").arg("/K").current_dir(dir).spawn()?;
+        Command::new("cmd").arg("/K").current_dir(dir).status()?;
     }
     #[cfg(target_os = "linux")]
     {
-        Command::new("bash").current_dir(dir).spawn()?;
+        Command::new("bash").current_dir(dir).status()?;
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").args(["-a", "Terminal"]).current_dir(dir).spawn()?;
+        Command::new("open").args(["-a", "Terminal"]).current_dir(dir).status()?;
     }
     Ok(())
 }
@@ -621,16 +629,33 @@ fn convert_ls_style(ls_style: LsStyle) -> Style {
 /// Handle what to do after exiting the TUI
 fn handle_exit_action(action: ExitAction) -> anyhow::Result<()> {
     match action {
-        ExitAction::OpenFile(path) => {
-            let editor = env::var("EDITOR").unwrap_or_else(|_| {
-                if cfg!(windows) { "notepad".to_string() } else { "vim".to_string() }
-            });
-            Command::new(editor).arg(path).status()?;
-        }
         ExitAction::PrintPath(path) => {
             println!("{}", canonicalize_path(path.as_path()).display());
         }
         ExitAction::None => {}
     }
+    Ok(())
+}
+
+fn open_file(path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("File does not exist: {}", path.display());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd").args(["/C", "start", "", &path.display().to_string()]).spawn()?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn()?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(path).spawn()?;
+    }
+
     Ok(())
 }
