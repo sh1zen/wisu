@@ -1,9 +1,11 @@
 use crate::common::sort;
 use clap::{Parser, ValueEnum};
+use serde::Deserialize;
 use std::fmt;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Deserialize)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 #[command(override_usage = "wisu [OPTIONS] [PATH]")]
@@ -12,6 +14,10 @@ pub struct Args {
     /// Start the interactive TUI explorer
     #[arg(short = 'i', long)]
     pub interactive: bool,
+
+    /// Path to a config file (TOML)
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 
     /// Export file path
     #[arg(short = 'o', default_value = None, value_parser = clap::builder::PossibleValuesParser::new(["json", "csv", "xml"]))]
@@ -33,7 +39,7 @@ pub struct Args {
     #[arg(long, default_value = "true")]
     pub stats: bool,
 
-    /// Show directories only
+    /// Show hyperlinks
     #[arg(short = 'l', long)]
     pub hyperlinks: bool,
 
@@ -98,12 +104,88 @@ pub struct Args {
     pub dotfiles_first: bool,
 }
 
-#[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq, Default)]
+impl Args {
+    /// Load `Args` from CLI + TOML file (if it exists).
+    /// CLI values override those from the file.
+    pub fn load() -> Self {
+        let cli_args = Args::parse(); // read CLI
+
+        if let Some(config_path) = cli_args.config.clone() {
+            if let Some(mut file_args) = Self::from_file(&config_path) {
+                file_args = Self::merge(file_args, cli_args);
+                return file_args;
+            }
+        }
+
+        // Otherwise, look for `wisu.toml` in the provided path
+        let candidate = cli_args.path.join("wisu.toml");
+        if let Some(mut file_args) = Self::from_file(&candidate) {
+            file_args = Self::merge(file_args, cli_args);
+            return file_args;
+        }
+
+        cli_args
+    }
+
+    fn from_file(path: &Path) -> Option<Self> {
+        if !path.exists() {
+            return None;
+        }
+        let content = fs::read_to_string(path).ok()?;
+        toml::from_str::<Args>(&content).ok()
+    }
+
+    /// Merge two Args: CLI values override those from the file
+    fn merge(mut file: Args, cli: Args) -> Args {
+        // Optional options
+        if cli.out.is_some() { file.out = cli.out; }
+        if cli.expand_level.is_some() { file.expand_level = cli.expand_level; }
+        if cli.level.is_some() { file.level = cli.level; }
+        if cli.files.is_some() { file.files = cli.files; }
+        if cli.config.is_some() { file.config = cli.config; }
+
+        // Path (if different from default)
+        if cli.path != PathBuf::from(".") { file.path = cli.path; }
+
+        // Boolean fields: if true in CLI → override
+        macro_rules! merge_flag {
+            ($field:ident) => {
+                if cli.$field {
+                    file.$field = true;
+                }
+            };
+        }
+
+        merge_flag!(interactive);
+        merge_flag!(dirs_only);
+        merge_flag!(info);
+        merge_flag!(stats);
+        merge_flag!(hyperlinks);
+        merge_flag!(all);
+        merge_flag!(gitignore);
+        merge_flag!(icons);
+        merge_flag!(size);
+        merge_flag!(permissions);
+        merge_flag!(files_only);
+        merge_flag!(dirs_first);
+        merge_flag!(case_sensitive);
+        merge_flag!(natural_sort);
+        merge_flag!(reverse);
+        merge_flag!(dotfiles_first);
+
+        // Enum or other fields with defaults
+        file.sort = cli.sort;
+
+        file
+    }
+}
+
+#[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub enum SortType {
     #[default]
     Name,
     Size,
-    Accessed, 
+    Accessed,
     Created,
     Modified,
     Extension,

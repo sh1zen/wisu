@@ -10,7 +10,6 @@ mod workers;
 
 use crate::common::plugins::apply_filter;
 use app::Args;
-use clap::Parser;
 #[cfg(windows)]
 use colored::control;
 use lscolors::LsColors;
@@ -38,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     control::set_override(true);
 
     // Parse the command-line arguments into our Args struct.
-    let mut args = apply_filter("parse_args", Args::parse());
+    let mut args = apply_filter("parse_args", Args::load());
 
     if !args.path.is_dir() {
         anyhow::bail!("'{}' is not a directory.", args.path.display());
