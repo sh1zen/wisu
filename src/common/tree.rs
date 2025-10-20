@@ -60,7 +60,7 @@ impl Tree {
             let size = if !is_dir { entry.metadata().map(|m| m.len()).unwrap_or(0) } else { 0 };
 
             // Always create an entry, even for empty dirs
-            let mut info = infos.entry(path.to_path_buf()).or_insert_with(TreeEntry::default);
+            let info = infos.entry(path.to_path_buf()).or_insert_with(TreeEntry::default);
             info.is_directory = is_dir;
             info.dirs.get_or_insert(0);
             info.files.get_or_insert(0);
