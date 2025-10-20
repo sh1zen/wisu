@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2025-10-20
+
+### Added
+
+- Support for config file .toml with --config option or default wisu.toml
+
 ## [0.1.1] - 2025-10-15
 
 ### Added

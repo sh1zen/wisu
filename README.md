@@ -12,20 +12,22 @@ A fast, minimalist directory tree viewer, written in Rust, with a powerful inter
 
 ## Features
 
-  - **Classic and interactive modes:** Use `wisu` for a classic `tree`-like view, or launch `wisu -i` for a fully interactive terminal Interface.
-  - **Theme-aware coloring:** Respects your system's `LS_COLORS` environment variable for fully customizable file and directory colors.
-  - **Rich information display (optional):**
-      - Display file-specific icons with `--icons` (requires Emoji support).
-      - Show file permissions with `-p`.
-      - Show file sizes with `-s`.
-      - Show file info with `-x`. 
-      - **Export:** Export path to (`CSV`, `XML`, `JSON`) with `-o` flag.
-  - **Smart filtering:**
-      - Respects your `.gitignore` files with the `-g` flag.
-      - Control recursion depth (`-L`) or show only directories (`-d`).
-      - Control max files per dir (`-F`), setting it to 0 displays only directories.
-  - **Plugin support:**
-      - You can customize wisu behaviour using custom filtering with **apply_filter(hook, Fn);** 
+- **Classic and interactive modes:** Use `wisu` for a classic `tree`-like view, or launch `wisu -i` for a fully
+  interactive terminal Interface.
+- **Theme-aware coloring:** Respects your system's `LS_COLORS` environment variable for fully customizable file and
+  directory colors.
+- **Rich information display (optional):**
+    - Display file-specific icons with `--icons` (requires Emoji support).
+    - Show file permissions with `-p`.
+    - Show file sizes with `-s`.
+    - Show file info with `-x`.
+    - **Export:** Export path to (`CSV`, `XML`, `JSON`) with `-o` flag.
+- **Smart filtering:**
+    - Respects your `.gitignore` files with the `-g` flag.
+    - Control recursion depth (`-L`) or show only directories (`-d`).
+    - Control max files per dir (`-F`), setting it to 0 displays only directories.
+- **Plugin support:**
+    - You can customize wisu behaviour using custom filtering with **apply_filter(hook, Fn);**
 
 ## Installation
 
@@ -33,15 +35,15 @@ A fast, minimalist directory tree viewer, written in Rust, with a powerful inter
 
 You need the Rust toolchain installed on your system to build `wisu`.
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/sh1zen/wisu.git
-    cd wisu
-    ```
-2.  **Build and install using Cargo:**
-    ```bash
-    cargo install --path .
-    ```
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/sh1zen/wisu.git
+   cd wisu
+   ```
+2. **Build and install using Cargo:**
+   ```bash
+   cargo install --path .
+   ```
 
 ## Usage
 
@@ -59,6 +61,7 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 | `-F`, `--files <NUM>`    | List max NUM files per directory.                                                                         |
 | `-o <TYPE>`,             | Export to file. TYPE: (`cxv`, `xml`, `json`)                                                              |
 | `-g`, `--gitignore`      | Respect `.gitignore` and other standard ignore files.                                                     |
+| `--config <PATH>`        | Loads configuration from a TOML file.                                                                        |
 | `--icons`                | Display file-specific icons using emoji.                                                                  |
 | `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only)                                             |
 | `-L`, `--level <LEVEL>`  | Maximum depth to descend.                                                                                 |
@@ -86,7 +89,6 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 | `Enter`     | **Context-aware action:**\<br\>- If on a file: Open it in the default editor (`$EDITOR`).\<br\>- If on a directory: Toggle expand/collapse. |
 | `q` / `Esc` | Quit the application normally.                                                                                                              |
 | `Ctrl`+`s`  | **Shell integration:** Quits and prints the selected path to stdout.                                                                        |
-
 
 ## Customization
 
@@ -176,7 +178,8 @@ wisu -L 10 | less -R
 
 ### Changing directories with `wisu`
 
-You can use `wisu` as a visual `cd` command. Add the following function to your shell's startup file (e.g., `~/.bashrc`, `~/.zshrc`):
+You can use `wisu` as a visual `cd` command. Add the following function to your shell's startup file (e.g., `~/.bashrc`,
+`~/.zshrc`):
 
 ```bash
 # A function to visually change directories with wisu
@@ -200,15 +203,19 @@ After adding this and starting a new shell session (or running `source ~/.bashrc
 chdir
 ```
 
-This will launch the `wisu` interactive UI. Navigate to the directory you want, press `Ctrl+s`, and your shell's current directory will instantly change.
+This will launch the `wisu` interactive UI. Navigate to the directory you want, press `Ctrl+s`, and your shell's current
+directory will instantly change.
 
 ## Color customization
 
-`wisu` respects your terminal's color theme by default. It reads the `LS_COLORS` environment variable to colorize files and directories according to your system's configuration. This is the same variable used by GNU `ls` and other modern command-line tools.
+`wisu` respects your terminal's color theme by default. It reads the `LS_COLORS` environment variable to colorize files
+and directories according to your system's configuration. This is the same variable used by GNU `ls` and other modern
+command-line tools.
 
 ### Windows
 
-Windows does not use the `LS_COLORS` variable natively, but you can set it manually to enable color support in modern terminals like Windows Terminal.
+Windows does not use the `LS_COLORS` variable natively, but you can set it manually to enable color support in modern
+terminals like Windows Terminal.
 
 To set it for your current **PowerShell** session, run:
 
