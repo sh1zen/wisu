@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2025-10-31
+
+### Added
+
+- Regex search
+
+### Fixed
+
+- Parent directory expansion on search
+- Improved search result by filtering out parents on subdirectory searches
+
+
 ## [0.1.2] - 2025-10-20
 
 ### Added

@@ -8,8 +8,6 @@ A fast, minimalist directory tree viewer, written in Rust, with a powerful inter
 
 ![](assets/wisu-demo.gif)
 
-*An interactive overview of a project's structure using `wisu`.*
-
 ## Features
 
 - **Classic and interactive modes:** Use `wisu` for a classic `tree`-like view, or launch `wisu -i` for a fully
@@ -79,6 +77,11 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 -----
 
 ## Interactive mode
+
+### Search
+
+ - With `/` classic search mode.
+ - With `/r:` regex search mode.
 
 ### Keyboard & Mouse controls
 
