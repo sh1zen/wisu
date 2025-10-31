@@ -19,6 +19,7 @@ use ratatui::{
     Frame,
     Terminal,
 };
+use regex::Regex;
 use std::io::{stdout, Stdout};
 use std::path::Path;
 use std::path::PathBuf;
@@ -202,39 +203,58 @@ impl TuiApp {
     }
 
     fn apply_search_filter(&mut self) {
-        let query = self.search_query.to_lowercase();
-        if query.is_empty() {
+        let raw_query = self.search_query.trim();
+
+        if raw_query.is_empty() {
             self.rebuild_visible_list();
             return;
         }
 
-        self.entries.iter_mut().for_each(|e| e.expanded = false);
+        let (is_regex, query) =
+            if raw_query.starts_with("r:") { (true, &raw_query[2..]) } else { (false, raw_query) };
+
         self.filtered_indices.clear();
 
-        for idx in 0..self.entries.len() {
-            let name = self.entries[idx]
-                .data
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_lowercase())
-                .unwrap_or_default();
-            if name.contains(&query) {
-                self.filtered_indices.push(idx);
-                let mut depth = self.entries[idx].data.depth;
-                let mut parent_idx = idx;
-                while depth > 0 {
-                    if let Some(p_idx) =
-                        (0..parent_idx).rev().find(|&i| self.entries[i].data.depth == depth - 1)
-                    {
-                        parent_idx = p_idx;
-                        self.entries[parent_idx].expanded = true;
-                        depth -= 1;
-                    } else {
-                        break;
+        // Only consider direct children of current_dir, exclude ".." and current_dir itself
+        let visible_entries: Vec<(usize, &TuiEntry)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.data.path.parent().map(|p| p == self.current_dir).unwrap_or(false)
+            })
+            .collect();
+
+        if is_regex {
+            if let Ok(re) = Regex::new(query) {
+                for (idx, entry) in visible_entries {
+                    let name = entry
+                        .data
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default();
+                    if re.is_match(&name) {
+                        self.filtered_indices.push(idx);
                     }
                 }
             }
+            // else invalid regex → empty results
+        } else {
+            let query_lc = query.to_lowercase();
+            for (idx, entry) in visible_entries {
+                let name = entry
+                    .data
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if name.contains(&query_lc) {
+                    self.filtered_indices.push(idx);
+                }
+            }
         }
+
         self.list_state.select(if self.filtered_indices.is_empty() { None } else { Some(0) });
     }
 
@@ -365,7 +385,7 @@ impl TuiApp {
                 } else if let Some(size) = entry.data.size {
                     info_text = format!("[{}]", format::size(size));
                 }
-            } else if args.size && !entry.data.is_directory {
+            } else if args.size {
                 if let Some(size) = entry.data.size {
                     info_text = format!("[{}]", format::size(size));
                 }
@@ -450,6 +470,8 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
 
         if app.mode == Mode::Search && !key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
+                KeyCode::Up => app.move_selection_up(),
+                KeyCode::Down => app.move_selection_down(),
                 KeyCode::Backspace => {
                     app.search_query.pop();
                     app.apply_search_filter();
@@ -462,7 +484,17 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
                 KeyCode::Enter => {
                     if let Some(entry) = app.get_current_entry() {
                         if entry.data.is_directory {
-                            app.toggle_expansion();
+                            // Apri la directory nel TUI
+                            if let Some(sel_idx) = app.list_state.selected() {
+                                let entry_idx = app.filtered_indices[sel_idx];
+                                app.enter_directory(entry_idx);
+
+                                // Esci dalla modalità di ricerca
+                                app.exit_search();
+
+                                terminal.clear()?;
+                                app.rebuild_visible_list();
+                            }
                         } else {
                             let _ = open_file(&entry.data.path);
                         }
@@ -488,18 +520,24 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
                     break ExitAction::PrintPath(entry.data.path.clone());
                 }
             }
-            KeyCode::Right | KeyCode::Left | KeyCode::Enter => {
+            KeyCode::Right | KeyCode::Left => {
                 if let Some(sel_idx) = app.list_state.selected() {
                     let entry_idx = app.filtered_indices[sel_idx];
                     let entry = &app.entries[entry_idx];
-                    let name = entry
-                        .data
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy())
-                        .unwrap_or_default();
 
-                    if name == ".." {
+                    if entry.data.path != app.current_dir.parent().unwrap_or(&app.current_dir) {
+                        app.toggle_expansion();
+                    } else {
+                        let _ = open_file(&entry.data.path);
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(sel_idx) = app.list_state.selected() {
+                    let entry_idx = app.filtered_indices[sel_idx];
+                    let entry = &app.entries[entry_idx];
+
+                    if entry.data.path == app.current_dir.parent().unwrap_or(&app.current_dir) {
                         app.go_up();
                     } else if entry.data.is_directory {
                         app.toggle_expansion();
@@ -512,14 +550,8 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
                 if let Some(sel_idx) = app.list_state.selected() {
                     let entry_idx = app.filtered_indices[sel_idx];
                     let entry = &app.entries[entry_idx];
-                    let name = entry
-                        .data
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy())
-                        .unwrap_or_default();
 
-                    if name == ".." {
+                    if entry.data.path == app.current_dir.parent().unwrap_or(&app.current_dir) {
                         app.go_up();
                     } else if entry.data.is_directory {
                         app.enter_directory(entry_idx);
