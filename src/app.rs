@@ -4,6 +4,8 @@ use serde::Deserialize;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use chrono::{Duration, NaiveDate, Utc};
 
 #[derive(Parser, Debug, Deserialize)]
 #[command(author, version, about, long_about = None)]
@@ -18,6 +20,10 @@ pub struct Args {
     /// Path to a config file (TOML)
     #[arg(long)]
     pub config: Option<PathBuf>,
+
+    /// Watch for filesystem changes and auto-refresh
+    #[arg(long, default_value = "false")]
+    pub watch: bool,
 
     /// Export file path
     #[arg(short = 'o', default_value = None, value_parser = clap::builder::PossibleValuesParser::new(["json", "csv", "xml"]))]
@@ -102,6 +108,12 @@ pub struct Args {
     /// Sort dotfiles and dotfolders first.
     #[arg(long)]
     pub dotfiles_first: bool,
+
+    /// Time filter: relative (5d, 2w, 3M, 1y, 30s, 10m) or absolute date.
+    /// Use -YYYY-MM-DD for "before date", YYYY-MM-DD for "after date".
+    /// Relative: s=seconds, m=minutes, h=hours, d=days, w=weeks, M=months, y=years
+    #[arg(short = 't', long)]
+    pub time: Option<TimeFilter>,
 }
 
 impl Args {
@@ -143,6 +155,7 @@ impl Args {
         if cli.level.is_some() { file.level = cli.level; }
         if cli.files.is_some() { file.files = cli.files; }
         if cli.config.is_some() { file.config = cli.config; }
+        if cli.time.is_some() { file.time = cli.time; }
 
         // Path (if different from default)
         if cli.path != PathBuf::from(".") { file.path = cli.path; }
@@ -157,6 +170,7 @@ impl Args {
         }
 
         merge_flag!(interactive);
+        merge_flag!(watch);
         merge_flag!(dirs_only);
         merge_flag!(info);
         merge_flag!(stats);
@@ -177,6 +191,120 @@ impl Args {
         file.sort = cli.sort;
 
         file
+    }
+}
+
+
+/// Represents a time-based filter for files
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "String")]
+pub struct TimeFilter {
+    pub mode: TimeFilterMode,
+    pub threshold: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum TimeFilterMode {
+    After,  // file modificato dopo questa data
+    Before, // file modificato prima di questa data
+}
+
+impl TimeFilter {
+    /// Check if a file timestamp matches this filter
+    pub fn matches(&self, file_time: chrono::DateTime<Utc>) -> bool {
+        match self.mode {
+            TimeFilterMode::After => file_time >= self.threshold,
+            TimeFilterMode::Before => file_time < self.threshold,
+        }
+    }
+}
+
+impl FromStr for TimeFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err("Empty time filter".to_string());
+        }
+
+        let now = Utc::now();
+
+        // Check for before (<) or after (>) prefix
+        let (mode, date_part) = if s.starts_with('<') {
+            (TimeFilterMode::Before, &s[1..])
+        } else if s.starts_with('>') {
+            (TimeFilterMode::After, &s[1..])
+        } else {
+            (TimeFilterMode::After, s) // default: after
+        };
+
+        // Try parsing as absolute date (multiple formats)
+        let parse_date = |date_str: &str| -> Option<NaiveDate> {
+            // Try dd-mm-yyyy, dd/mm/yyyy, yyyy-mm-dd
+            NaiveDate::parse_from_str(date_str, "%d-%m-%Y")
+                .or_else(|_| NaiveDate::parse_from_str(date_str, "%d/%m/%Y"))
+                .or_else(|_| NaiveDate::parse_from_str(date_str, "%Y-%m-%d"))
+                .ok()
+        };
+
+        // Try parsing as date
+        if let Some(date) = parse_date(date_part) {
+            let dt = date.and_hms_opt(0, 0, 0).unwrap();
+            return Ok(TimeFilter {
+                mode,
+                threshold: chrono::DateTime::from_naive_utc_and_offset(dt, Utc),
+            });
+        }
+
+        // If had a prefix but couldn't parse date, error
+        if s.starts_with('<') || s.starts_with('>') {
+            return Err(format!("Invalid date format: {}. Use dd-mm-yyyy, dd/mm/yyyy or yyyy-mm-dd", date_part));
+        }
+
+        // Parse relative time: number + unit
+        let last_char = s.chars().last().ok_or("Empty time filter")?;
+        if !last_char.is_ascii_alphabetic() {
+            return Err(format!("Invalid time filter: {}. Use relative (5d, 2w, 3M) or date (dd-mm-yyyy)", s));
+        }
+
+        let (num_str, unit) = s.split_at(s.len() - 1);
+        let num: i64 = num_str.parse().map_err(|_| {
+            format!("Invalid time filter: {}. Use relative (5d, 2w, 3M) or date (dd-mm-yyyy)", s)
+        })?;
+
+        let duration = match unit {
+            "s" => Duration::seconds(num),
+            "m" => Duration::minutes(num),
+            "h" => Duration::hours(num),
+            "d" => Duration::days(num),
+            "w" => Duration::weeks(num),
+            "M" => Duration::days(num * 30), // approssimazione mese
+            "y" => Duration::days(num * 365), // approssimazione anno
+            _ => return Err(format!("Unknown time unit: {}. Use s/m/h/d/w/M/y", unit)),
+        };
+
+        Ok(TimeFilter {
+            mode: TimeFilterMode::After,
+            threshold: now - duration,
+        })
+    }
+}
+
+impl TryFrom<String> for TimeFilter {
+    type Error = String;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl fmt::Display for TimeFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let prefix = match self.mode {
+            TimeFilterMode::Before => "before ",
+            TimeFilterMode::After => "after ",
+        };
+        write!(f, "{}{}", prefix, self.threshold.format("%Y-%m-%d %H:%M:%S"))
     }
 }
 

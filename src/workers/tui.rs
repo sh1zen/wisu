@@ -1,5 +1,5 @@
 use crate::app::Args;
-use crate::common::tree::{Tree, TreeEntry};
+use crate::common::tree::{Tree, TreeEntry, TreeWatcher};
 use crate::utils::dir::canonicalize_path;
 use crate::utils::format;
 use lscolors::{Color as LsColor, LsColors, Style as LsStyle};
@@ -9,21 +9,23 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend}, layout::{Constraint, Direction, Layout},
+    Frame, Terminal,
+    backend::{Backend, CrosstermBackend},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
-    Frame,
-    Terminal,
 };
 use regex::Regex;
-use std::io::{stdout, Stdout};
+use std::collections::HashSet;
+use std::io::{Stdout, stdout};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// TUI modes: normal navigation vs search mode
 #[derive(Clone, Copy, PartialEq)]
@@ -45,6 +47,16 @@ enum ExitAction {
     PrintPath(PathBuf),
 }
 
+/// Result of checking filesystem changes
+enum ChangeResult {
+    /// No changes detected
+    None,
+    /// Changes detected - need full refresh (simplest and most reliable)
+    NeedsRefresh,
+    /// Still debouncing, not ready yet
+    Pending,
+}
+
 /// Main TUI application state
 pub struct TuiApp {
     // All entries in the current view
@@ -62,10 +74,19 @@ pub struct TuiApp {
     // Currently displayed directory
     current_dir: PathBuf,
     root_dir: PathBuf,
+    // Watch mode state
+    watcher: Option<TreeWatcher>,
+    last_change_detected: Option<Instant>,
+    pending_changed_paths: HashSet<PathBuf>,
+    watch_status: Option<String>,
 }
 
 impl TuiApp {
-    pub fn new(entries: Vec<TreeEntry>, current_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        entries: Vec<TreeEntry>,
+        current_dir: impl Into<PathBuf>,
+        watcher: Option<TreeWatcher>,
+    ) -> Self {
         let current_dir = current_dir.into();
         let entries: Vec<TuiEntry> =
             entries.into_iter().map(|e| TuiEntry { data: e, expanded: false }).collect();
@@ -79,9 +100,89 @@ impl TuiApp {
             backup_indices: Vec::new(),
             current_dir: current_dir.clone(),
             root_dir: current_dir, // <- qui impostiamo il root
+            watcher,
+            last_change_detected: None,
+            pending_changed_paths: HashSet::new(),
+            watch_status: None,
         };
         app.rebuild_visible_list();
         app
+    }
+
+    /// Check for filesystem changes and determine what kind of update is needed
+    fn check_for_changes(&mut self) -> ChangeResult {
+        let Some(watcher) = &self.watcher else { return ChangeResult::None };
+
+        // Collect all pending change events
+        let new_paths = watcher.collect_changed_paths();
+
+        if !new_paths.is_empty() {
+            // Add to pending paths
+            for path in new_paths {
+                self.pending_changed_paths.insert(path);
+            }
+
+            // Start or reset debounce timer
+            self.last_change_detected = Some(Instant::now());
+            self.watch_status = Some("Changes detected...".to_string());
+        }
+
+        // No pending changes
+        if self.pending_changed_paths.is_empty() {
+            return ChangeResult::None;
+        }
+
+        // Still debouncing
+        if let Some(detected_at) = self.last_change_detected {
+            if detected_at.elapsed() < Duration::from_millis(300) {
+                return ChangeResult::Pending;
+            }
+        }
+
+        // Debounce complete, trigger refresh
+        self.pending_changed_paths.clear();
+        self.last_change_detected = None;
+        self.watch_status = Some("Refreshing...".to_string());
+
+        ChangeResult::NeedsRefresh
+    }
+
+    /// Refresh the tree entries while preserving state
+    pub fn refresh_entries(&mut self, new_entries: Vec<TreeEntry>) {
+        // Store current selection path
+        let selected_path = self.get_current_entry().map(|e| e.data.path.clone());
+
+        // Store expanded directories
+        let expanded_paths: HashSet<PathBuf> =
+            self.entries.iter().filter(|e| e.expanded).map(|e| e.data.path.clone()).collect();
+
+        // Update entries
+        self.entries = new_entries
+            .into_iter()
+            .map(|e| {
+                let was_expanded = expanded_paths.contains(&e.path);
+                TuiEntry { data: e, expanded: was_expanded }
+            })
+            .collect();
+
+        // Rebuild visible list
+        self.rebuild_visible_list();
+
+        // Restore selection
+        if let Some(path) = selected_path {
+            if let Some(pos) =
+                self.filtered_indices.iter().position(|&i| self.entries[i].data.path == path)
+            {
+                self.list_state.select(Some(pos));
+            }
+        }
+
+        self.watch_status = Some("Updated ✓".to_string());
+    }
+
+    /// Clear the watch status message
+    pub fn clear_watch_status(&mut self) {
+        self.watch_status = None;
     }
 
     pub fn apply_initial_expansion(&mut self, expand_level: Option<usize>) {
@@ -307,7 +408,7 @@ impl TuiApp {
             return;
         }
 
-        // Trova l’indice del nodo ".." e entra nella directory superiore
+        // Trova l'indice del nodo ".." e entra nella directory superiore
         if let Some(parent) = self.current_dir.parent() {
             if let Some(back_idx) = self.entries.iter().position(|e| e.data.path == parent) {
                 self.enter_directory(back_idx);
@@ -329,8 +430,13 @@ impl TuiApp {
             ])
             .split(f.area());
 
-        // Breadcrumb path at the top
-        let breadcrumb = Paragraph::new(self.current_dir.display().to_string())
+        // Breadcrumb path at the top (with watch indicator if active)
+        let breadcrumb_text = if self.watcher.is_some() {
+            format!("watching: {}", self.current_dir.display())
+        } else {
+            self.current_dir.display().to_string()
+        };
+        let breadcrumb = Paragraph::new(breadcrumb_text)
             .style(Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC));
         f.render_widget(breadcrumb, chunks[0]);
 
@@ -419,10 +525,16 @@ impl TuiApp {
 
         // Status bar with instructions or search query
         let status_text = match self.mode {
-            Mode::Normal => Span::styled(
-                "q: quit | /: search | r: refresh | Tab: enter dir | Ctrl+T: open terminal | Ctrl+S: print path",
-                Style::default().fg(Color::Gray),
-            ),
+            Mode::Normal => {
+                let base = "q: quit | /: search | r: refresh | Tab: enter dir | Ctrl+T: open terminal | Ctrl+S: print path";
+
+                if let Some(status) = &self.watch_status {
+                    Span::styled(format!("{} | {}", base, status), Style::default().fg(Color::Gray))
+                } else {
+
+                    Span::styled(format!("{}", base), Style::default().fg(Color::Gray))
+                }
+            }
             Mode::Search => Span::styled(
                 format!("/{}", self.search_query),
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -434,7 +546,8 @@ impl TuiApp {
 
 /// Run the TUI application
 pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
-    let entries = Tree::prepare(args, true)?.tree_info;
+    let (tree, watcher) = Tree::prepare_with_watch(args, true)?;
+    let entries = tree.tree_info;
 
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -447,22 +560,50 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
         let _ = event::read()?;
     }
 
-    let mut app = TuiApp::new(entries, args.path.clone());
+    let mut app = TuiApp::new(entries, args.path.clone(), watcher);
     app.apply_initial_expansion(args.expand_level);
 
+    // Track when to clear watch status message
+    let mut status_clear_time: Option<Instant> = None;
+
     let exit_action = loop {
+        // Check for filesystem changes (watch mode)
+        match app.check_for_changes() {
+            ChangeResult::NeedsRefresh => {
+                let new_tree = Tree::prepare(args, false)?;
+                app.refresh_entries(new_tree.tree_info);
+                status_clear_time = Some(Instant::now() + Duration::from_secs(2));
+            }
+            ChangeResult::Pending | ChangeResult::None => {}
+        }
+
+        // Clear status message after timeout
+        if let Some(clear_at) = status_clear_time {
+            if Instant::now() >= clear_at {
+                app.clear_watch_status();
+                status_clear_time = None;
+            }
+        }
+
         terminal.draw(|f| app.render::<CrosstermBackend<Stdout>>(f, args, ls_colors))?;
 
-        let Event::Key(key) = event::read()? else {
-            if let Event::Mouse(mouse) = event::read()? {
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => app.move_selection_up(),
-                    MouseEventKind::ScrollDown => app.move_selection_down(),
-                    _ => {}
-                }
+        // Poll with timeout to allow watch mode updates
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+
+        let evt = event::read()?;
+
+        if let Event::Mouse(mouse) = evt {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => app.move_selection_up(),
+                MouseEventKind::ScrollDown => app.move_selection_down(),
+                _ => {}
             }
             continue;
-        };
+        }
+
+        let Event::Key(key) = evt else { continue };
 
         if key.kind != KeyEventKind::Press {
             continue;
@@ -509,11 +650,10 @@ pub fn run(args: &Args, ls_colors: &LsColors) -> anyhow::Result<()> {
             KeyCode::Char('q') => break ExitAction::None,
             KeyCode::Char('r') => {
                 terminal.clear()?;
-                let new_entries = Tree::prepare(args, true)?.tree_info;
-                app = TuiApp::new(new_entries, app.current_dir.clone());
+                let new_tree = Tree::prepare(args, false)?;
+                app.refresh_entries(new_tree.tree_info);
                 app.apply_initial_expansion(args.expand_level);
                 terminal.clear()?;
-                app.rebuild_visible_list();
             }
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(entry) = app.get_current_entry() {

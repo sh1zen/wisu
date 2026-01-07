@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-01-07
+
+### Added
+
+- Time filtering
+- Update realtime filesystem changes
+
 ## [0.1.3] - 2025-10-31
 
 ### Added

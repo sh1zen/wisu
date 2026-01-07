@@ -12,6 +12,7 @@ A fast, minimalist directory tree viewer, written in Rust, with a powerful inter
 
 - **Classic and interactive modes:** Use `wisu` for a classic `tree`-like view, or launch `wisu -i` for a fully
   interactive terminal Interface.
+- **Watching mode:** in interactive mode is possible to enable real time update from filesystem using `--watch`
 - **Theme-aware coloring:** Respects your system's `LS_COLORS` environment variable for fully customizable file and
   directory colors.
 - **Rich information display (optional):**
@@ -24,8 +25,9 @@ A fast, minimalist directory tree viewer, written in Rust, with a powerful inter
     - Respects your `.gitignore` files with the `-g` flag.
     - Control recursion depth (`-L`) or show only directories (`-d`).
     - Control max files per dir (`-F`), setting it to 0 displays only directories.
+   - Time-based filtering with `-t` to show files modified within a time range.
 - **Plugin support:**
-    - You can customize wisu behaviour using custom filtering with **apply_filter(hook, Fn);**
+    - You can customize wisu behavior using custom filtering with **apply_filter(hook, Fn);**
 
 ## Installation
 
@@ -61,11 +63,13 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 | `-g`, `--gitignore`      | Respect `.gitignore` and other standard ignore files.                                                     |
 | `--config <PATH>`        | Loads configuration from a TOML file.                                                                     |
 | `--icons`                | Display file-specific icons using emoji.                                                                  |
+| `--watch`                | Enable watching mode (interactive mode only)                                                              |
 | `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only)                                             |
 | `-L`, `--level <LEVEL>`  | Maximum depth to descend.                                                                                 |
 | `-p`, `--permissions`    | Display file permissions (Unix-like systems only).                                                        |
 | `-x`, `--info`           | Display files and directories info.                                                                       |
 | `-s`, `--size`           | Display just files size.                                                                                  |
+| `-t`, `--time <FILTER>`  | Filter files by modification time (see [Time filtering](#time-filtering)).                                |
 | `--sort <TYPE>`          | Sort entries by the specified criteria (`name`, `size`, `accessed`,  `created`, `modified`, `extension`). |
 | `--dirs-first`           | Sort directories before files.                                                                            |
 | `--case-sensitive`       | Use case-sensitive sorting.                                                                               |
@@ -75,6 +79,55 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 | `--expand-level <LEVEL>` | **Interactive mode only:** Initial depth to expand the interactive tree.                                  |
 
 -----
+
+## Time filtering
+
+The `-t` / `--time` option filters files based on their modification time. It supports both **relative** and **absolute** time filters.
+
+### Relative time (files modified within the last...)
+
+| Unit | Description |
+|:-----|:------------|
+| `s`  | Seconds     |
+| `m`  | Minutes     |
+| `h`  | Hours       |
+| `d`  | Days        |
+| `w`  | Weeks       |
+| `M`  | Months      |
+| `y`  | Years       |
+
+**Examples:**
+```bash
+wisu -t 30s      # Files modified in the last 30 seconds
+wisu -t 10m      # Files modified in the last 10 minutes
+wisu -t 2h       # Files modified in the last 2 hours
+wisu -t 5d       # Files modified in the last 5 days
+wisu -t 2w       # Files modified in the last 2 weeks
+wisu -t 3M       # Files modified in the last 3 months
+wisu -t 1y       # Files modified in the last year
+```
+
+### Absolute date (files modified before/after a specific date)
+
+Supported date formats: `dd-mm-yyyy`, `dd/mm/yyyy`, `yyyy-mm-dd`
+
+| Prefix | Description                    |
+|:-------|:-------------------------------|
+| (none) | Files modified **after** date  |
+| `>`    | Files modified **after** date  |
+| `<`    | Files modified **before** date |
+
+**Examples:**
+```bash
+wisu -t 01-06-2024       # Files modified after June 1st, 2024
+wisu -t 01/06/2024       # Same as above (alternative format)
+wisu -t 2024-06-01       # Same as above (ISO format)
+wisu -t "<01-01-2023"    # Files modified before January 1st, 2023
+wisu -t ">15/03/2024"    # Files modified after March 15th, 2024
+```
+
+> **Note:** When using `<` or `>` prefixes, wrap the argument in quotes to prevent shell interpretation.
+
 
 ## Interactive mode
 
