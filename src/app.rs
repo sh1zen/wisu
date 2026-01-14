@@ -1,11 +1,11 @@
 use crate::common::sort;
+use chrono::{Duration, NaiveDate, Utc};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use chrono::{Duration, NaiveDate, Utc};
 
 #[derive(Parser, Debug, Deserialize)]
 #[command(author, version, about, long_about = None)]
@@ -13,107 +13,138 @@ use chrono::{Duration, NaiveDate, Utc};
 #[command(override_usage = "wisu [OPTIONS] [PATH]")]
 #[derive(Clone)]
 pub struct Args {
+    /* =========================
+     * Execution mode
+     * ========================= */
     /// Start the interactive TUI explorer
     #[arg(short = 'i', long)]
     pub interactive: bool,
-
-    /// Path to a config file (TOML)
-    #[arg(long)]
-    pub config: Option<PathBuf>,
 
     /// Watch for filesystem changes and auto-refresh
     #[arg(long, default_value = "false")]
     pub watch: bool,
 
-    /// Export file path
-    #[arg(short = 'o', default_value = None, value_parser = clap::builder::PossibleValuesParser::new(["json", "csv", "xml"]))]
-    pub out: Option<String>,
+    /* =========================
+     * Input / configuration
+     * ========================= */
+    /// Path to a config file (TOML)
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 
-    /// The path to the directory to explore/display. Defaults to the current directory.
+    /// Path to the directory to explore/display
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
+    /* =========================
+     * Output / export
+     * ========================= */
+    /// Export output format (json, csv, xml)
+    #[arg(short = 'o', default_value = None, value_parser = clap::builder::PossibleValuesParser::new(["json", "csv", "xml"]))]
+    pub out: Option<String>,
+
+    /* =========================
+     * Content filters
+     * ========================= */
     /// Show directories only
     #[arg(short = 'd', long)]
     pub dirs_only: bool,
-
-    /// Show directories info
-    #[arg(short = 'x', long, default_value = "false")]
-    pub info: bool,
-
-    /// Show stats of the scan
-    #[arg(long, default_value = "true")]
-    pub stats: bool,
-
-    /// Show hyperlinks
-    #[arg(short = 'l', long)]
-    pub hyperlinks: bool,
-
-    /// Show all files, including hidden ones.
-    #[arg(short = 'a', long)]
-    pub all: bool,
-
-    /// Respect .gitignore and other standard ignore files.
-    #[arg(short = 'g', long)]
-    pub gitignore: bool,
-
-    /// Display file-specific icons (requires a Nerd Font)
-    #[arg(long)]
-    pub icons: bool,
-
-    /// Display the size of files.
-    #[arg(short = 's', long)]
-    pub size: bool,
-
-    /// Display file permissions.
-    #[arg(short = 'p', long)]
-    pub permissions: bool,
-
-    /// Initial depth to expand the directory tree (interactive only)
-    #[arg(long)]
-    pub expand_level: Option<usize>,
-
-    /// Maximum depth to descend in the directory tree (non-interactive only)
-    #[arg(short = 'L', long)]
-    pub level: Option<usize>,
-
-    /// Maximum files in directory tree (non-interactive only)
-    #[arg(short = 'F', long)]
-    pub files: Option<usize>,
 
     /// List only files (non-interactive only)
     #[arg(short = 'f', long)]
     pub files_only: bool,
 
-    /// Sort entries by the specified criteria.
+    /// Show all files, including hidden ones
+    #[arg(short = 'a', long)]
+    pub all: bool,
+
+    /// Respect .gitignore and other ignore files
+    #[arg(short = 'g', long)]
+    pub gitignore: bool,
+
+    /// Exclude files by extension (comma-separated, e.g. "log,tmp")
+    #[arg(short = 'e', long)]
+    pub exclude: Option<String>,
+
+    /// Time filter (relative or absolute date)
+    ///
+    /// Relative: 5d, 2w, 3M, 1y, 30s, 10m
+    /// Absolute:
+    ///   YYYY-MM-DD   → after date
+    ///  -YYYY-MM-DD   → before date
+    #[arg(short = 't', long)]
+    pub time: Option<TimeFilter>,
+
+    /* =========================
+     * Depth & limits
+     * ========================= */
+    /// Initial depth to expand the tree (interactive only)
+    #[arg(long)]
+    pub expand_level: Option<usize>,
+
+    /// Maximum directory depth (non-interactive only)
+    #[arg(short = 'L', long)]
+    pub level: Option<usize>,
+
+    /// Maximum number of files (non-interactive only)
+    #[arg(short = 'F', long)]
+    pub files: Option<usize>,
+
+    /* =========================
+     * Sorting
+     * ========================= */
+    /// Sort entries by criteria
     #[arg(long, default_value_t = SortType::Name)]
     pub sort: SortType,
 
-    /// Sort directories before files.
-    #[arg(long)]
-    pub dirs_first: bool,
-
-    /// Use case-sensitive sorting.
-    #[arg(long)]
-    pub case_sensitive: bool,
-
-    /// Use natural/version sorting (e.g., file1 < file10).
-    #[arg(long)]
-    pub natural_sort: bool,
-
-    /// Reverse the sort order.
+    /// Reverse sort order
     #[arg(short = 'r', long)]
     pub reverse: bool,
 
-    /// Sort dotfiles and dotfolders first.
+    /// Sort directories before files
+    #[arg(long)]
+    pub dirs_first: bool,
+
+    /// Use case-sensitive sorting
+    #[arg(long)]
+    pub case_sensitive: bool,
+
+    /// Use natural/version sorting (file2 < file10)
+    #[arg(long)]
+    pub natural_sort: bool,
+
+    /// Sort dotfiles and dotfolders first
     #[arg(long)]
     pub dotfiles_first: bool,
 
-    /// Time filter: relative (5d, 2w, 3M, 1y, 30s, 10m) or absolute date.
-    /// Use -YYYY-MM-DD for "before date", YYYY-MM-DD for "after date".
-    /// Relative: s=seconds, m=minutes, h=hours, d=days, w=weeks, M=months, y=years
-    #[arg(short = 't', long)]
-    pub time: Option<TimeFilter>,
+    /* =========================
+     * Display options
+     * ========================= */
+    /// Show hyperlinks
+    #[arg(short = 'l', long)]
+    pub hyperlinks: bool,
+
+    /// Display file-specific icons (requires Nerd Font)
+    #[arg(long)]
+    pub icons: bool,
+
+    /* =========================
+     * Metadata & details
+     * ========================= */
+    /// Show file sizes
+    #[arg(short = 's', long)]
+    pub size: bool,
+
+    /// Show file permissions
+    #[arg(short = 'p', long)]
+    pub permissions: bool,
+
+    /// Show extended directory info
+    #[arg(short = 'x', long, default_value = "false")]
+    pub info: bool,
+
+    /// Show scan statistics
+    #[arg(long, default_value = "true")]
+    pub stats: bool,
 }
 
 impl Args {
@@ -150,15 +181,32 @@ impl Args {
     /// Merge two Args: CLI values override those from the file
     fn merge(mut file: Args, cli: Args) -> Args {
         // Optional options
-        if cli.out.is_some() { file.out = cli.out; }
-        if cli.expand_level.is_some() { file.expand_level = cli.expand_level; }
-        if cli.level.is_some() { file.level = cli.level; }
-        if cli.files.is_some() { file.files = cli.files; }
-        if cli.config.is_some() { file.config = cli.config; }
-        if cli.time.is_some() { file.time = cli.time; }
+        if cli.out.is_some() {
+            file.out = cli.out;
+        }
+        if cli.expand_level.is_some() {
+            file.expand_level = cli.expand_level;
+        }
+        if cli.level.is_some() {
+            file.level = cli.level;
+        }
+        if cli.files.is_some() {
+            file.files = cli.files;
+        }
+        if cli.config.is_some() {
+            file.config = cli.config;
+        }
+        if cli.time.is_some() {
+            file.time = cli.time;
+        }
+        if cli.exclude.is_some() {
+            file.exclude = cli.exclude;
+        }
 
         // Path (if different from default)
-        if cli.path != PathBuf::from(".") { file.path = cli.path; }
+        if cli.path != PathBuf::from(".") {
+            file.path = cli.path;
+        }
 
         // Boolean fields: if true in CLI → override
         macro_rules! merge_flag {
@@ -192,8 +240,46 @@ impl Args {
 
         file
     }
-}
 
+    /// Get the set of excluded extensions (normalized to lowercase)
+    pub fn get_excluded_extensions(&self) -> std::collections::HashSet<String> {
+        let mut excluded = std::collections::HashSet::new();
+
+        if let Some(ref exclude_str) = self.exclude {
+            for ext in exclude_str.split(',') {
+                let normalized = ext.trim().to_lowercase();
+                if !normalized.is_empty() {
+                    // Remove leading dot if present
+                    let clean_ext = if normalized.starts_with('.') {
+                        normalized[1..].to_string()
+                    } else {
+                        normalized
+                    };
+                    excluded.insert(clean_ext);
+                }
+            }
+        }
+
+        excluded
+    }
+
+    /// Check if a file should be excluded based on its extension
+    pub fn is_excluded(&self, path: &Path) -> bool {
+        if self.exclude.is_none() {
+            return false;
+        }
+
+        let excluded = self.get_excluded_extensions();
+
+        if let Some(ext) = path.extension() {
+            if let Some(ext_str) = ext.to_str() {
+                return excluded.contains(&ext_str.to_lowercase());
+            }
+        }
+
+        false
+    }
+}
 
 /// Represents a time-based filter for files
 #[derive(Debug, Clone, Deserialize)]
@@ -259,13 +345,19 @@ impl FromStr for TimeFilter {
 
         // If had a prefix but couldn't parse date, error
         if s.starts_with('<') || s.starts_with('>') {
-            return Err(format!("Invalid date format: {}. Use dd-mm-yyyy, dd/mm/yyyy or yyyy-mm-dd", date_part));
+            return Err(format!(
+                "Invalid date format: {}. Use dd-mm-yyyy, dd/mm/yyyy or yyyy-mm-dd",
+                date_part
+            ));
         }
 
         // Parse relative time: number + unit
         let last_char = s.chars().last().ok_or("Empty time filter")?;
         if !last_char.is_ascii_alphabetic() {
-            return Err(format!("Invalid time filter: {}. Use relative (5d, 2w, 3M) or date (dd-mm-yyyy)", s));
+            return Err(format!(
+                "Invalid time filter: {}. Use relative (5d, 2w, 3M) or date (dd-mm-yyyy)",
+                s
+            ));
         }
 
         let (num_str, unit) = s.split_at(s.len() - 1);
@@ -279,15 +371,12 @@ impl FromStr for TimeFilter {
             "h" => Duration::hours(num),
             "d" => Duration::days(num),
             "w" => Duration::weeks(num),
-            "M" => Duration::days(num * 30), // approssimazione mese
-            "y" => Duration::days(num * 365), // approssimazione anno
+            "M" => Duration::days(num * 30),
+            "y" => Duration::days(num * 365),
             _ => return Err(format!("Unknown time unit: {}. Use s/m/h/d/w/M/y", unit)),
         };
 
-        Ok(TimeFilter {
-            mode: TimeFilterMode::After,
-            threshold: now - duration,
-        })
+        Ok(TimeFilter { mode: TimeFilterMode::After, threshold: now - duration })
     }
 }
 

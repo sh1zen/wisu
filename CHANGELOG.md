@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-01-14
+
+### Added
+
+- File exclusion by extension
+
+### Fixed
+
+- Improved tree generation performances
+
 ## [0.1.4] - 2026-01-07
 
 ### Added
@@ -15,7 +25,7 @@ All notable changes to this project will be documented in this file.
 
 - Regex search
 
-### Fixed
+
 
 - Parent directory expansion on search
 - Improved search result by filtering out parents on subdirectory searches

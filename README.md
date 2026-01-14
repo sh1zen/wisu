@@ -4,7 +4,9 @@
 [![Latest Version](https://img.shields.io/crates/v/wisu.svg)](https://crates.io/crates/wisu)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A fast, minimalist directory tree viewer, written in Rust, with a powerful interactive mode.
+### A Fast and minimalistic directory tree viewer, written in Rust, with a powerful interactive mode.
+
+#### Inspired by [lstr]("https://github.com/bgreenwell/lstr");
 
 ![](assets/wisu-demo.gif)
 
@@ -56,27 +58,28 @@ Note that `PATH` defaults to the current directory (`.`) if not specified.
 | Option                   | Description                                                                                               |
 |:-------------------------|:----------------------------------------------------------------------------------------------------------|
 | `-i`                     | Enable interactive mode (see below).                                                                      |
+| `--watch`                | Enable watching mode (interactive mode only).                                                             |
+| `--config <PATH>`        | Loads configuration from a TOML file.                                                                     |
+| `-o <TYPE>`              | Export to file. TYPE: (`csv`, `xml`, `json`).                                                             |
 | `-a`, `--all`            | List all files and directories, including hidden ones.                                                    |
 | `-d`, `--dirs-only`      | List directories only, ignoring all files.                                                                |
-| `-F`, `--files <NUM>`    | List max NUM files per directory.                                                                         |
-| `-o <TYPE>`,             | Export to file. TYPE: (`cxv`, `xml`, `json`)                                                              |
 | `-g`, `--gitignore`      | Respect `.gitignore` and other standard ignore files.                                                     |
-| `--config <PATH>`        | Loads configuration from a TOML file.                                                                     |
-| `--icons`                | Display file-specific icons using emoji.                                                                  |
-| `--watch`                | Enable watching mode (interactive mode only)                                                              |
-| `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only)                                             |
-| `-L`, `--level <LEVEL>`  | Maximum depth to descend.                                                                                 |
-| `-p`, `--permissions`    | Display file permissions (Unix-like systems only).                                                        |
-| `-x`, `--info`           | Display files and directories info.                                                                       |
-| `-s`, `--size`           | Display just files size.                                                                                  |
+| `--exclude <EXTS>`       | Exclude files by extension (comma-separated, e.g. `log,tmp`).                                             |
 | `-t`, `--time <FILTER>`  | Filter files by modification time (see [Time filtering](#time-filtering)).                                |
-| `--sort <TYPE>`          | Sort entries by the specified criteria (`name`, `size`, `accessed`,  `created`, `modified`, `extension`). |
+| `-L`, `--level <LEVEL>`  | Maximum depth to descend.                                                                                 |
+| `-F`, `--files <NUM>`    | List max NUM files per directory.                                                                         |
+| `--expand-level <LEVEL>` | **Interactive mode only:** Initial depth to expand the interactive tree.                                  |
+| `--sort <TYPE>`          | Sort entries by the specified criteria (`name`, `size`, `accessed`, `created`, `modified`, `extension`).  |
 | `--dirs-first`           | Sort directories before files.                                                                            |
 | `--case-sensitive`       | Use case-sensitive sorting.                                                                               |
 | `--natural-sort`         | Use natural/version sorting (e.g., file1 < file10).                                                       |
 | `-r`, `--reverse`        | Reverse the sort order.                                                                                   |
 | `--dotfiles-first`       | Sort dotfiles and dot-folders first (dot-folders → folders → dotfiles → files).                           |
-| `--expand-level <LEVEL>` | **Interactive mode only:** Initial depth to expand the interactive tree.                                  |
+| `--icons`                | Display file-specific icons using emoji.                                                                  |
+| `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only).                                            |
+| `-s`, `--size`           | Display just files size.                                                                                  |
+| `-p`, `--permissions`    | Display file permissions (Unix-like systems only).                                                        |
+| `-x`, `--info`           | Display files and directories info.                                                                       |
 
 -----
 

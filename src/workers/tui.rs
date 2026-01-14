@@ -9,19 +9,19 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    Frame, Terminal,
-    backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout},
+    backend::{Backend, CrosstermBackend}, layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    Frame,
+    Terminal,
 };
 use regex::Regex;
 use std::collections::HashSet;
-use std::io::{Stdout, stdout};
+use std::io::{stdout, Stdout};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -531,7 +531,6 @@ impl TuiApp {
                 if let Some(status) = &self.watch_status {
                     Span::styled(format!("{} | {}", base, status), Style::default().fg(Color::Gray))
                 } else {
-
                     Span::styled(format!("{}", base), Style::default().fg(Color::Gray))
                 }
             }
