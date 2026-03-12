@@ -1,7 +1,7 @@
 use crate::app::Args;
 use crate::common::{icons, tree};
 use crate::utils::{dir, format};
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 use lscolors::LsColors;
 use std::fs;
 use std::io::{self, Write};
@@ -76,7 +76,7 @@ pub fn print_tree(
         "{}{}{}{}",
         root_permissions.dimmed(),
         root_icon,
-        args.path.display().to_string().blue().bold(),
+        style_root_path(&args.path.display().to_string()),
         root_size_str.dimmed()
     )?;
 
@@ -154,28 +154,7 @@ fn style_entry_name(path: &std::path::Path, ls_colors: &LsColors) -> colored::Co
     let metadata = fs::metadata(path).ok();
 
     // Default color based on type/extension
-    let mut styled = if let Some(metadata) = &metadata {
-        if metadata.is_dir() {
-            name.blue().bold()
-        } else if is_executable(path, metadata) {
-            name.green()
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            match ext.to_lowercase().as_str() {
-                "rs" | "c" | "cpp" | "py" | "php" | "html" | "css" | "js" => name.cyan(), // source files
-                "zip" | "tar" | "gz" | "rar" | "7zip" => name.yellow(), // archives
-                "psd" | "svg" | "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" => name.magenta(), // images
-                "mp4" | "mkv" | "avi" | "mov" | "flv" | "wmv" => name.purple(), // videos
-                "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pps" | "ppsx" => {
-                    name.bright_black()
-                }
-                _ => name.white(),
-            }
-        } else {
-            name.normal()
-        }
-    } else {
-        name.normal()
-    };
+    let mut styled = default_entry_style(path, &name, metadata.as_ref());
 
     // LS colors always take precedence
     if let Some(ls_style) = ls_colors.style_for_path(path) {
@@ -198,6 +177,155 @@ fn style_entry_name(path: &std::path::Path, ls_colors: &LsColors) -> colored::Co
     }
 
     styled
+}
+
+#[inline]
+fn style_root_path(path: &str) -> ColoredString {
+    #[cfg(target_os = "macos")]
+    {
+        path.bright_cyan().bold()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        path.blue().bold()
+    }
+}
+
+#[inline]
+fn default_entry_style(
+    path: &std::path::Path,
+    name: &str,
+    metadata: Option<&fs::Metadata>,
+) -> ColoredString {
+    let Some(metadata) = metadata else { return name.normal() };
+
+    if metadata.is_dir() {
+        #[cfg(target_os = "macos")]
+        {
+            return name.bright_cyan().bold();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            return name.blue().bold();
+        }
+    }
+
+    if is_executable(path, metadata) {
+        #[cfg(target_os = "macos")]
+        {
+            return name.bright_green();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            return name.green();
+        }
+    }
+
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    let ext = ext.as_deref().unwrap_or_default();
+
+    if is_text_extension(ext) {
+        #[cfg(target_os = "macos")]
+        {
+            return name.bright_white();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            return name.cyan();
+        }
+    }
+
+    match ext {
+        "rs" | "c" | "cpp" | "py" | "php" | "html" | "css" | "js" => {
+            #[cfg(target_os = "macos")]
+            {
+                name.bright_blue()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                name.cyan()
+            }
+        }
+        "zip" | "tar" | "gz" | "rar" | "7zip" => {
+            #[cfg(target_os = "macos")]
+            {
+                name.bright_yellow()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                name.yellow()
+            }
+        }
+        "psd" | "svg" | "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" => {
+            #[cfg(target_os = "macos")]
+            {
+                name.bright_magenta()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                name.magenta()
+            }
+        }
+        "mp4" | "mkv" | "avi" | "mov" | "flv" | "wmv" => {
+            #[cfg(target_os = "macos")]
+            {
+                name.bright_cyan()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                name.purple()
+            }
+        }
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pps" | "ppsx" => {
+            #[cfg(target_os = "macos")]
+            {
+                name.bright_white()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                name.bright_black()
+            }
+        }
+        _ => {
+            #[cfg(target_os = "macos")]
+            {
+                name.bright_white()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                name.normal()
+            }
+        }
+    }
+}
+
+#[inline]
+fn is_text_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "txt"
+            | "md"
+            | "markdown"
+            | "rst"
+            | "json"
+            | "jsonl"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "log"
+            | "csv"
+            | "tsv"
+            | "xml"
+            | "env"
+            | "sql"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+    )
 }
 
 // Cross-platform function to check if a file is executable
@@ -254,4 +382,19 @@ fn make_hyperlink(path: &std::path::Path, styled_name: colored::ColoredString) -
         }
     }
     styled_name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_text_extension;
+
+    #[test]
+    fn text_extensions_are_recognized() {
+        assert!(is_text_extension("txt"));
+        assert!(is_text_extension("md"));
+        assert!(is_text_extension("json"));
+        assert!(is_text_extension("toml"));
+        assert!(!is_text_extension("bin"));
+        assert!(!is_text_extension(""));
+    }
 }

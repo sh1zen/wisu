@@ -65,6 +65,10 @@ pub struct Args {
     #[arg(short = 'e', long)]
     pub exclude: Option<String>,
 
+    /// Exclude directories by name (comma-separated, e.g. "node_modules,target")
+    #[arg(long)]
+    pub exclude_dirs: Option<String>,
+
     /// Time filter (relative or absolute date)
     ///
     /// Relative: 5d, 2w, 3M, 1y, 30s, 10m
@@ -202,6 +206,9 @@ impl Args {
         if cli.exclude.is_some() {
             file.exclude = cli.exclude;
         }
+        if cli.exclude_dirs.is_some() {
+            file.exclude_dirs = cli.exclude_dirs;
+        }
 
         // Path (if different from default)
         if cli.path != PathBuf::from(".") {
@@ -278,6 +285,22 @@ impl Args {
         }
 
         false
+    }
+
+    /// Get the set of excluded directory names (normalized to lowercase)
+    pub fn get_excluded_directories(&self) -> std::collections::HashSet<String> {
+        let mut excluded = std::collections::HashSet::new();
+
+        if let Some(ref exclude_dirs_str) = self.exclude_dirs {
+            for dir_name in exclude_dirs_str.split(',') {
+                let normalized = dir_name.trim().to_lowercase();
+                if !normalized.is_empty() {
+                    excluded.insert(normalized);
+                }
+            }
+        }
+
+        excluded
     }
 }
 

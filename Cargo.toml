@@ -13,33 +13,33 @@ categories = ["command-line-utilities", "filesystem", "development-tools"]
 
 [dependencies]
 # terminal
-colored = "3.0.0"
-indicatif = "0.18.3"
+colored = "3.1.1"
+indicatif = "0.18.4"
 lscolors = "0.21.0"
 ratatui = "0.30.0"
 #utils
-chrono = { version = "0.4.42", features = ["serde"] }
-anyhow = "1.0.100"
-clap = { version = "4.5.54", features = ["derive"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+anyhow = "1.0.102"
+clap = { version = "4.6.0", features = ["derive"] }
 ignore = "0.4.25"
-once_cell = "1.21.3"
+once_cell = "1.21.4"
 url = "2.5.8"
 #manipulation
-regex = "1.12.2"
+regex = "1.12.3"
 natord = "1.0.9"
 # data
 csv = "1.4.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde-xml-rs = "0.8.2"
-toml = "0.9.11+spec-1.1.0"
-notify = "8.2.0"
+toml = "1.0.6+spec-1.1.0"
+notify = "9.0.0-rc.2"
 
 # Dependencies for testing the command-line interface
 [dev-dependencies]
-assert_cmd = "2.1.2"
-predicates = "3.1.3"
-tempfile = "3.24.0"
+assert_cmd = "2.2.0"
+predicates = "3.1.4"
+tempfile = "3.27.0"
 
 [build-dependencies]
 walkdir = "2.5.0"

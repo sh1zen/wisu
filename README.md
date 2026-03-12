@@ -27,7 +27,8 @@
     - Respects your `.gitignore` files with the `-g` flag.
     - Control recursion depth (`-L`) or show only directories (`-d`).
     - Control max files per dir (`-F`), setting it to 0 displays only directories.
-   - Time-based filtering with `-t` to show files modified within a time range.
+    - Exclude directories by name with `--exclude-dirs` (comma-separated).
+    - Time-based filtering with `-t` to show files modified within a time range.
 - **Plugin support:**
     - You can customize wisu behavior using custom filtering with **apply_filter(hook, Fn);**
 
@@ -55,37 +56,39 @@ wisu [PATH] [OPTIONS]
 
 Note that `PATH` defaults to the current directory (`.`) if not specified.
 
-| Option                   | Description                                                                                               |
-|:-------------------------|:----------------------------------------------------------------------------------------------------------|
-| `-i`                     | Enable interactive mode (see below).                                                                      |
-| `--watch`                | Enable watching mode (interactive mode only).                                                             |
-| `--config <PATH>`        | Loads configuration from a TOML file.                                                                     |
-| `-o <TYPE>`              | Export to file. TYPE: (`csv`, `xml`, `json`).                                                             |
-| `-a`, `--all`            | List all files and directories, including hidden ones.                                                    |
-| `-d`, `--dirs-only`      | List directories only, ignoring all files.                                                                |
-| `-g`, `--gitignore`      | Respect `.gitignore` and other standard ignore files.                                                     |
-| `--exclude <EXTS>`       | Exclude files by extension (comma-separated, e.g. `log,tmp`).                                             |
-| `-t`, `--time <FILTER>`  | Filter files by modification time (see [Time filtering](#time-filtering)).                                |
-| `-L`, `--level <LEVEL>`  | Maximum depth to descend.                                                                                 |
-| `-F`, `--files <NUM>`    | List max NUM files per directory.                                                                         |
-| `--expand-level <LEVEL>` | **Interactive mode only:** Initial depth to expand the interactive tree.                                  |
-| `--sort <TYPE>`          | Sort entries by the specified criteria (`name`, `size`, `accessed`, `created`, `modified`, `extension`).  |
-| `--dirs-first`           | Sort directories before files.                                                                            |
-| `--case-sensitive`       | Use case-sensitive sorting.                                                                               |
-| `--natural-sort`         | Use natural/version sorting (e.g., file1 < file10).                                                       |
-| `-r`, `--reverse`        | Reverse the sort order.                                                                                   |
-| `--dotfiles-first`       | Sort dotfiles and dot-folders first (dot-folders → folders → dotfiles → files).                           |
-| `--icons`                | Display file-specific icons using emoji.                                                                  |
-| `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only).                                            |
-| `-s`, `--size`           | Display just files size.                                                                                  |
-| `-p`, `--permissions`    | Display file permissions (Unix-like systems only).                                                        |
-| `-x`, `--info`           | Display files and directories info.                                                                       |
+| Option                   | Description                                                                                              |
+|:-------------------------|:---------------------------------------------------------------------------------------------------------|
+| `-i`                     | Enable interactive mode (see below).                                                                     |
+| `--watch`                | Enable watching mode (interactive mode only).                                                            |
+| `--config <PATH>`        | Loads configuration from a TOML file.                                                                    |
+| `-o <TYPE>`              | Export to file. TYPE: (`csv`, `xml`, `json`).                                                            |
+| `-a`, `--all`            | List all files and directories, including hidden ones.                                                   |
+| `-d`, `--dirs-only`      | List directories only, ignoring all files.                                                               |
+| `-g`, `--gitignore`      | Respect `.gitignore` and other standard ignore files.                                                    |
+| `--exclude <EXTS>`       | Exclude files by extension (comma-separated, e.g. `log,tmp`).                                            |
+| `--exclude-dirs <DIRS>`  | Exclude directories by name from scan (comma-separated, e.g. `node_modules,target`).                     |
+| `-t`, `--time <FILTER>`  | Filter files by modification time (see [Time filtering](#time-filtering)).                               |
+| `-L`, `--level <LEVEL>`  | Maximum depth to descend.                                                                                |
+| `-F`, `--files <NUM>`    | List max NUM files per directory.                                                                        |
+| `--expand-level <LEVEL>` | **Interactive mode only:** Initial depth to expand the interactive tree.                                 |
+| `--sort <TYPE>`          | Sort entries by the specified criteria (`name`, `size`, `accessed`, `created`, `modified`, `extension`). |
+| `--dirs-first`           | Sort directories before files.                                                                           |
+| `--case-sensitive`       | Use case-sensitive sorting.                                                                              |
+| `--natural-sort`         | Use natural/version sorting (e.g., file1 < file10).                                                      |
+| `-r`, `--reverse`        | Reverse the sort order.                                                                                  |
+| `--dotfiles-first`       | Sort dotfiles and dot-folders first (dot-folders → folders → dotfiles → files).                          |
+| `--icons`                | Display file-specific icons using emoji.                                                                 |
+| `--hyperlinks`           | Render file paths as clickable hyperlinks (classic mode only).                                           |
+| `-s`, `--size`           | Display just files size.                                                                                 |
+| `-p`, `--permissions`    | Display file permissions (Unix-like systems only).                                                       |
+| `-x`, `--info`           | Display files and directories info.                                                                      |
 
 -----
 
 ## Time filtering
 
-The `-t` / `--time` option filters files based on their modification time. It supports both **relative** and **absolute** time filters.
+The `-t` / `--time` option filters files based on their modification time. It supports both **relative** and **absolute
+** time filters.
 
 ### Relative time (files modified within the last...)
 
@@ -100,6 +103,7 @@ The `-t` / `--time` option filters files based on their modification time. It su
 | `y`  | Years       |
 
 **Examples:**
+
 ```bash
 wisu -t 30s      # Files modified in the last 30 seconds
 wisu -t 10m      # Files modified in the last 10 minutes
@@ -121,6 +125,7 @@ Supported date formats: `dd-mm-yyyy`, `dd/mm/yyyy`, `yyyy-mm-dd`
 | `<`    | Files modified **before** date |
 
 **Examples:**
+
 ```bash
 wisu -t 01-06-2024       # Files modified after June 1st, 2024
 wisu -t 01/06/2024       # Same as above (alternative format)
@@ -131,13 +136,12 @@ wisu -t ">15/03/2024"    # Files modified after March 15th, 2024
 
 > **Note:** When using `<` or `>` prefixes, wrap the argument in quotes to prevent shell interpretation.
 
-
 ## Interactive mode
 
 ### Search
 
- - With `/` classic search mode.
- - With `/r:` regex search mode.
+- With `/` classic search mode.
+- With `/r:` regex search mode.
 
 ### Keyboard & Mouse controls
 

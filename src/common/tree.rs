@@ -6,7 +6,9 @@ use chrono::{DateTime, Utc};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::path::Component;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
@@ -109,6 +111,114 @@ fn should_exclude(entry: &ignore::DirEntry, args: &Args) -> bool {
 }
 
 impl Tree {
+    fn compare_entries_by_aggregated_size(
+        &self,
+        idx_a: usize,
+        idx_b: usize,
+        args: &Args,
+    ) -> Ordering {
+        let a = &self.tree_info[idx_a];
+        let b = &self.tree_info[idx_b];
+
+        let mut ord = Ordering::Equal;
+
+        if args.dirs_first {
+            ord = match (a.is_directory, b.is_directory) {
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                _ => Ordering::Equal,
+            };
+        }
+
+        if ord == Ordering::Equal && args.dotfiles_first {
+            let a_dot =
+                a.path.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.starts_with('.'));
+            let b_dot =
+                b.path.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.starts_with('.'));
+            ord = match (a_dot, b_dot) {
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                _ => Ordering::Equal,
+            };
+        }
+
+        if ord == Ordering::Equal {
+            ord = a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0));
+        }
+
+        if ord == Ordering::Equal {
+            let a_name =
+                a.path.file_name().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+            let b_name =
+                b.path.file_name().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+
+            ord = if args.case_sensitive {
+                a_name.cmp(&b_name)
+            } else {
+                a_name.to_lowercase().cmp(&b_name.to_lowercase())
+            };
+        }
+
+        if args.reverse { ord.reverse() } else { ord }
+    }
+
+    fn reorder_hierarchically_by_aggregated_size(&mut self, args: &Args) {
+        let mut root_indices: Vec<usize> = self
+            .tree_info
+            .iter()
+            .enumerate()
+            .filter_map(|(i, info)| (info.depth == 1).then_some(i))
+            .collect();
+
+        let mut children_by_parent: HashMap<std::path::PathBuf, Vec<usize>> = HashMap::new();
+
+        for (i, info) in self.tree_info.iter().enumerate() {
+            if info.depth <= 1 {
+                continue;
+            }
+            if let Some(parent) = info.path.parent() {
+                children_by_parent.entry(parent.to_path_buf()).or_default().push(i);
+            }
+        }
+
+        root_indices.sort_unstable_by(|&a, &b| self.compare_entries_by_aggregated_size(a, b, args));
+        for children in children_by_parent.values_mut() {
+            children.sort_unstable_by(|&a, &b| self.compare_entries_by_aggregated_size(a, b, args));
+        }
+
+        let mut ordered_indices = Vec::with_capacity(self.entries.len());
+
+        fn collect(
+            idx: usize,
+            children_by_parent: &HashMap<std::path::PathBuf, Vec<usize>>,
+            tree_info: &[TreeEntry],
+            out: &mut Vec<usize>,
+        ) {
+            out.push(idx);
+            if let Some(children) = children_by_parent.get(&tree_info[idx].path) {
+                for &child in children {
+                    collect(child, children_by_parent, tree_info, out);
+                }
+            }
+        }
+
+        for idx in root_indices {
+            collect(idx, &children_by_parent, &self.tree_info, &mut ordered_indices);
+        }
+
+        let old_entries = std::mem::take(&mut self.entries);
+        let old_info = std::mem::take(&mut self.tree_info);
+
+        self.entries = ordered_indices.iter().map(|&i| old_entries[i].clone()).collect();
+        self.tree_info = ordered_indices.iter().map(|&i| old_info[i].clone()).collect();
+
+        let mut depth_index: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (new_i, info) in self.tree_info.iter().enumerate() {
+            depth_index.entry(info.depth).or_default().push(new_i);
+        }
+        self.depth_index = depth_index;
+    }
+
     /// Prune directories that have no file descendants (used after time filtering)
     fn prune_empty_dirs(mut tree: Tree) -> Tree {
         // Pre-allocate with estimated capacity
@@ -197,7 +307,11 @@ impl Tree {
             // Get values before borrowing mutably
             let (size, dirs, files) = {
                 let current = infos.get(path).cloned().unwrap_or_default();
-                (current.size.unwrap_or(0), if is_dir { 1 } else { 0 }, if !is_dir { 1 } else { 0 })
+                (
+                    current.size.unwrap_or(0),
+                    if is_dir { current.dirs.unwrap_or(0) + 1 } else { 0 },
+                    if is_dir { current.files.unwrap_or(0) } else { current.files.unwrap_or(1) },
+                )
             };
 
             let parent_info = infos.entry(parent_path.to_path_buf()).or_default();
@@ -209,14 +323,27 @@ impl Tree {
         // Filter entries according to args.files_only and args.files
         let max_files = args.files;
         let files_only = args.files_only;
+        let dirs_only = args.dirs_only;
+        let max_level = args.level;
         let mut filtered_entries = Vec::with_capacity(entries.len());
         let mut files_count_in_dir: HashMap<std::path::PathBuf, usize> = HashMap::new();
 
         for entry in entries {
             let path = entry.path();
             let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+            let depth = entry.depth();
+
+            if let Some(max) = max_level {
+                if depth > max {
+                    continue;
+                }
+            }
 
             if files_only && is_dir {
+                continue;
+            }
+
+            if dirs_only && !is_dir {
                 continue;
             }
 
@@ -293,7 +420,13 @@ impl Tree {
             depth_index.entry(depth).or_insert_with(Vec::new).push(i);
         }
 
-        Tree { entries: filtered_entries, tree_info, depth_index }
+        let mut tree = Tree { entries: filtered_entries, tree_info, depth_index };
+
+        if !args.files_only && matches!(args.sort, crate::app::SortType::Size) {
+            tree.reorder_hierarchically_by_aggregated_size(args);
+        }
+
+        tree
     }
 
     /// Creates a filesystem watcher for the given path
@@ -322,7 +455,6 @@ impl Tree {
     pub fn prepare(args: &Args, show_progress: bool) -> anyhow::Result<Self> {
         let mut builder = WalkBuilder::new(&args.path);
         builder.hidden(!args.all).git_ignore(args.gitignore);
-        builder.max_depth(args.level);
 
         let spinner = if show_progress {
             let spinner = ProgressBar::new_spinner();
@@ -342,8 +474,8 @@ impl Tree {
         let mut entries = Vec::new();
         let has_time_filter = args.time.is_some();
         let has_exclude_filter = args.exclude.is_some();
-        let dirs_only = args.dirs_only;
-
+        let excluded_dirs = args.get_excluded_directories();
+        let has_excluded_dirs = !excluded_dirs.is_empty();
         for entry in builder.build().filter_map(Result::ok) {
             if entry.depth() == 0 {
                 continue;
@@ -351,9 +483,18 @@ impl Tree {
 
             let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
 
-            // Apply dirs_only filter
-            if dirs_only && !is_dir {
-                continue;
+            if has_excluded_dirs {
+                let rel_path = entry.path().strip_prefix(&args.path).unwrap_or(entry.path());
+                let in_excluded_dir = rel_path.components().any(|c| match c {
+                    Component::Normal(name) => {
+                        excluded_dirs.contains(&name.to_string_lossy().to_lowercase())
+                    }
+                    _ => false,
+                });
+
+                if in_excluded_dir {
+                    continue;
+                }
             }
 
             // Apply exclude filter (only to files)
@@ -370,10 +511,6 @@ impl Tree {
                 spinner.set_message(format!("Scanning: {}", entry.path().display()));
             }
             entries.push(entry);
-        }
-
-        if show_progress {
-            spinner.finish_with_message("Completed ✅");
         }
 
         let spinner = if show_progress {
@@ -402,11 +539,6 @@ impl Tree {
         // Prune empty directories if time filter or exclude filter is active
         let tree =
             if has_time_filter || has_exclude_filter { Self::prune_empty_dirs(tree) } else { tree };
-
-        if show_progress {
-            spinner.finish_with_message("Completed ✅");
-            println!("\n");
-        }
 
         Ok(apply_filter("tree_entries", tree))
     }

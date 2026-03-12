@@ -232,3 +232,107 @@ fn test_default_sort_order() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+/// Tests that -d keeps directory aggregate stats while hiding file entries
+#[test]
+fn test_dirs_only_with_info_keeps_file_stats() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    fs::create_dir(temp_dir.path().join("dir1"))?;
+    fs::write(temp_dir.path().join("dir1").join("a.txt"), "abc")?;
+    fs::write(temp_dir.path().join("dir1").join("b.txt"), "defgh")?;
+
+    let mut cmd = Command::cargo_bin("wisu")?;
+    cmd.arg("-d").arg("-x").arg(temp_dir.path());
+
+    let output = cmd.output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+
+    assert!(stdout.contains("dir1"));
+    assert!(!stdout.contains("a.txt"));
+    assert!(!stdout.contains("b.txt"));
+    assert!(stdout.contains("2 files"));
+    assert!(!stdout.contains("[ 0 B  0 dirs, 0 files ]"));
+
+    Ok(())
+}
+
+/// Tests that -L limits display depth but keeps aggregate stats from deeper descendants
+#[test]
+fn test_level_one_with_info_keeps_deep_stats() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    fs::create_dir(temp_dir.path().join("dir1"))?;
+    fs::create_dir(temp_dir.path().join("dir1").join("nested"))?;
+    fs::write(temp_dir.path().join("dir1").join("nested").join("deep.txt"), "abcdef")?;
+
+    let mut cmd = Command::cargo_bin("wisu")?;
+    cmd.arg("-L").arg("1").arg("-x").arg(temp_dir.path());
+
+    let output = cmd.output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+
+    assert!(stdout.contains("dir1"));
+    assert!(!stdout.contains("nested"));
+    assert!(!stdout.contains("deep.txt"));
+    assert!(stdout.contains("1 dirs, 1 files"));
+    assert!(!stdout.contains("[ 0 B  0 dirs, 0 files ]"));
+
+    Ok(())
+}
+
+/// Tests that --sort size with -d -L 1 uses aggregated directory size for ordering
+#[test]
+fn test_sort_size_dirs_only_level_one_uses_aggregated_size() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    fs::create_dir(temp_dir.path().join("small"))?;
+    fs::create_dir(temp_dir.path().join("mid"))?;
+    fs::create_dir(temp_dir.path().join("big"))?;
+
+    fs::create_dir(temp_dir.path().join("small").join("n"))?;
+    fs::create_dir(temp_dir.path().join("mid").join("n"))?;
+    fs::create_dir(temp_dir.path().join("big").join("n"))?;
+
+    fs::write(temp_dir.path().join("small").join("n").join("a.bin"), vec![0_u8; 10])?;
+    fs::write(temp_dir.path().join("mid").join("n").join("a.bin"), vec![0_u8; 100])?;
+    fs::write(temp_dir.path().join("big").join("n").join("a.bin"), vec![0_u8; 1000])?;
+
+    let mut cmd = Command::cargo_bin("wisu")?;
+    cmd.arg("--sort")
+        .arg("size")
+        .arg("-d")
+        .arg("-L")
+        .arg("1")
+        .arg("-x")
+        .arg(temp_dir.path());
+
+    let output = cmd.output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+
+    let small_pos = stdout.find("small").unwrap();
+    let mid_pos = stdout.find("mid").unwrap();
+    let big_pos = stdout.find("big").unwrap();
+    assert!(small_pos < mid_pos && mid_pos < big_pos);
+
+    Ok(())
+}
+
+/// Tests excluding directory names from scan
+#[test]
+fn test_exclude_dirs_from_scan() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    fs::create_dir(temp_dir.path().join("keep"))?;
+    fs::create_dir(temp_dir.path().join("skipme"))?;
+    fs::write(temp_dir.path().join("keep").join("ok.txt"), "ok")?;
+    fs::write(temp_dir.path().join("skipme").join("secret.txt"), "secret")?;
+
+    let mut cmd = Command::cargo_bin("wisu")?;
+    cmd.arg("--exclude-dirs").arg("skipme").arg("-a").arg(temp_dir.path());
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("keep"))
+        .stdout(predicate::str::contains("ok.txt"))
+        .stdout(predicate::str::contains("skipme").not())
+        .stdout(predicate::str::contains("secret.txt").not());
+
+    Ok(())
+}

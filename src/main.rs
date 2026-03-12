@@ -47,10 +47,6 @@ fn main() -> anyhow::Result<()> {
         args.size = true;
     }
 
-    if args.dirs_only {
-        args.files = Some(0);
-    }
-
     if args.out.is_some() {
         return workers::export(&args);
     }
