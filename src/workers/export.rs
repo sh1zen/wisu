@@ -1,8 +1,9 @@
 use crate::app::Args;
-use crate::common::tree::{TreeEntry, Tree};
-use crate::utils::dir::get_permission;
+use crate::common::tree::{Tree, TreeEntry};
 use anyhow::Result;
+use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, serde::Serialize)]
 pub struct ExportNode {
@@ -39,8 +40,6 @@ pub fn export(args: &Args) -> Result<()> {
     }
 
     let start = std::time::Instant::now();
-
-    // ───────────── Data Preparation ─────────────
     let tree = Tree::prepare(args, true)?;
 
     let format = OutputFormat::from_str(&args.out).ok_or_else(|| {
@@ -92,42 +91,32 @@ pub fn export(args: &Args) -> Result<()> {
     Ok(())
 }
 
-/// Exports the tree as a flat list
 fn build_export_flat_list(tree: &Tree, args: &Args) -> Result<Vec<ExportNode>> {
     let default_info = TreeEntry::default();
     let canonical_root = fs::canonicalize(&args.path).unwrap_or(args.path.clone());
+    let root_name = args.path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-    let mut flat_nodes = Vec::new();
+    let mut flat_nodes = Vec::with_capacity(tree.entries.len());
     for (idx, entry) in tree.entries.iter().enumerate() {
-        if args.dirs_only && !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+        if args.dirs_only && !entry.file_type().is_some_and(|ft| ft.is_dir()) {
             continue;
         }
 
-        let c_info = tree.tree_info.get(idx).unwrap_or(&default_info);
-
-        let permissions =
-            if args.permissions { get_permission(entry.metadata().ok()) } else { String::new() };
-
-        let display_path = if entry.path() == canonical_root {
-            format!("./{}", args.path.file_name().unwrap_or_default().to_string_lossy())
-        } else if let Ok(rel) = entry.path().strip_prefix(&canonical_root) {
-            format!(
-                "./{}/{}",
-                args.path.file_name().unwrap_or_default().to_string_lossy(),
-                rel.display()
-            )
-        } else {
-            entry.path().display().to_string()
-        };
+        let info = tree.tree_info.get(idx).unwrap_or(&default_info);
+        let display_path = display_path(entry.path(), &canonical_root, &root_name);
 
         flat_nodes.push(ExportNode {
             name: entry.file_name().to_string_lossy().to_string(),
             path: display_path,
-            is_dir: entry.file_type().map(|ft| ft.is_dir()).unwrap_or(true),
-            size: c_info.size,
-            dir_count: c_info.dirs,
-            file_count: c_info.files,
-            permissions,
+            is_dir: info.is_directory,
+            size: info.size,
+            dir_count: info.dirs,
+            file_count: info.files,
+            permissions: if args.permissions {
+                info.permissions.clone().unwrap_or_default()
+            } else {
+                String::new()
+            },
             children: None,
         });
     }
@@ -135,96 +124,117 @@ fn build_export_flat_list(tree: &Tree, args: &Args) -> Result<Vec<ExportNode>> {
     Ok(flat_nodes)
 }
 
-/// Exports the tree as a hierarchical structure
 fn build_export_tree(tree: &Tree, args: &Args) -> ExportNode {
-    use std::collections::HashMap;
-    use std::path::{Path, PathBuf};
+    let root_path = fs::canonicalize(&args.path).unwrap_or(args.path.clone());
+    let root_name = root_path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-    let root_path = &args.path;
-
-    // ────────────────────────────────
-    //  Build parent → children map
-    // ────────────────────────────────
-    let mut children_map: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-
-    for entry in &tree.entries {
-        let path = entry.path();
-        let parent = path.parent().unwrap_or(root_path);
-
-        let rel_parent = parent.strip_prefix(root_path).unwrap_or(parent).to_path_buf();
-        let rel_child = path.strip_prefix(root_path).unwrap_or(path).to_path_buf();
-
-        children_map.entry(rel_parent).or_default().push(rel_child);
+    let mut children_map: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    for (idx, entry) in tree.entries.iter().enumerate() {
+        if let Some(parent) = entry.path().parent() {
+            children_map.entry(parent.to_path_buf()).or_default().push(idx);
+        }
     }
 
-    // ────────────────────────────────
-    //  Recursive function to build nodes
-    // ────────────────────────────────
     fn build_node(
-        rel_path: &Path,
+        idx: usize,
+        tree: &Tree,
+        children_map: &HashMap<PathBuf, Vec<usize>>,
         root_path: &Path,
-        children_map: &HashMap<PathBuf, Vec<PathBuf>>,
+        root_name: &str,
         args: &Args,
     ) -> ExportNode {
-        let full_path = root_path.join(rel_path);
-        let is_dir = full_path.is_dir();
-        let metadata = full_path.metadata().ok();
+        let entry = &tree.entries[idx];
+        let info = &tree.tree_info[idx];
+        let path = entry.path();
 
-        let size = if args.size || args.info {
-            metadata.as_ref().map(|m| m.len())
-        } else {
-            None
-        };
-
-        let permissions = if args.permissions {
-            get_permission(metadata)
-        } else {
-            String::new()
-        };
-
-        let display_path = if rel_path.as_os_str().is_empty() {
-            format!(
-                "./{}",
-                root_path.file_name().unwrap_or_default().to_string_lossy()
-            )
-        } else {
-            format!(
-                "./{}/{}",
-                root_path.file_name().unwrap_or_default().to_string_lossy(),
-                rel_path.display()
-            )
-        };
-
-        // Recursively build children
-        let mut children_nodes = Vec::new();
-        if let Some(children) = children_map.get(rel_path) {
-            for child_rel in children {
-                let child_node = build_node(child_rel, root_path, children_map, args);
-                if args.dirs_only && !child_node.is_dir {
+        let mut children = Vec::new();
+        if let Some(child_indices) = children_map.get(path) {
+            for &child_idx in child_indices {
+                let child = build_node(child_idx, tree, children_map, root_path, root_name, args);
+                if args.dirs_only && !child.is_dir {
                     continue;
                 }
-                children_nodes.push(child_node);
+                children.push(child);
             }
         }
 
         ExportNode {
-            name: if rel_path.as_os_str().is_empty() {
-                root_path.file_name().unwrap_or_default().to_string_lossy().to_string()
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: display_path(path, root_path, root_name),
+            is_dir: info.is_directory,
+            size: info.size,
+            dir_count: info.dirs,
+            file_count: info.files,
+            permissions: if args.permissions {
+                info.permissions.clone().unwrap_or_default()
             } else {
-                full_path.file_name().unwrap_or_default().to_string_lossy().to_string()
+                String::new()
             },
-            path: display_path,
-            is_dir,
-            size,
-            dir_count: None,
-            file_count: None,
-            permissions,
-            children: if children_nodes.is_empty() { None } else { Some(children_nodes) },
+            children: if children.is_empty() { None } else { Some(children) },
         }
     }
 
-    // ────────────────────────────────
-    // Explicitly build the root node
-    // ────────────────────────────────
-    build_node(Path::new(""), root_path, &children_map, args)
+    let mut root_children = Vec::new();
+    if let Some(child_indices) = children_map.get(&root_path) {
+        for &child_idx in child_indices {
+            let child = build_node(child_idx, tree, &children_map, &root_path, &root_name, args);
+            if args.dirs_only && !child.is_dir {
+                continue;
+            }
+            root_children.push(child);
+        }
+    }
+
+    let root_permissions = if args.permissions {
+        fs::metadata(&root_path)
+            .ok()
+            .map(|metadata| crate::utils::dir::get_permission(Some(metadata)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let root_entries = tree.entries_at_depth(1);
+    ExportNode {
+        name: root_name.clone(),
+        path: format!("./{root_name}"),
+        is_dir: true,
+        size: if args.size || args.info {
+            Some(root_entries.iter().map(|(_, info)| info.size.unwrap_or(0)).sum())
+        } else {
+            None
+        },
+        dir_count: if args.info {
+            Some(
+                root_entries
+                    .iter()
+                    .filter(|(_, info)| info.is_directory)
+                    .count() as u64,
+            )
+        } else {
+            None
+        },
+        file_count: if args.info {
+            Some(
+                root_entries
+                    .iter()
+                    .filter(|(_, info)| !info.is_directory)
+                    .count() as u64,
+            )
+        } else {
+            None
+        },
+        permissions: root_permissions,
+        children: if root_children.is_empty() { None } else { Some(root_children) },
+    }
+}
+
+fn display_path(path: &Path, canonical_root: &Path, root_name: &str) -> String {
+    if path == canonical_root {
+        format!("./{root_name}")
+    } else if let Ok(rel) = path.strip_prefix(canonical_root) {
+        format!("./{root_name}/{}", rel.display())
+    } else {
+        path.display().to_string()
+    }
 }

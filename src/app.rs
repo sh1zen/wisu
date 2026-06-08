@@ -302,6 +302,44 @@ impl Args {
 
         excluded
     }
+
+    #[inline]
+    pub fn is_export_mode(&self) -> bool {
+        self.out.is_some()
+    }
+
+    #[inline]
+    pub fn needs_time_metadata(&self) -> bool {
+        self.time.is_some()
+            || matches!(self.sort, SortType::Accessed | SortType::Created | SortType::Modified)
+    }
+
+    #[inline]
+    pub fn needs_aggregated_metadata(&self) -> bool {
+        self.size
+            || self.info
+            || self.stats
+            || self.is_export_mode()
+            || matches!(self.sort, SortType::Size)
+    }
+
+    #[inline]
+    pub fn needs_permissions_metadata(&self) -> bool {
+        self.permissions
+    }
+
+    #[inline]
+    pub fn needs_executable_metadata(&self) -> bool {
+        cfg!(unix) && !self.interactive && !self.is_export_mode()
+    }
+
+    #[inline]
+    pub fn needs_filesystem_metadata(&self) -> bool {
+        self.needs_aggregated_metadata()
+            || self.needs_permissions_metadata()
+            || self.needs_time_metadata()
+            || self.needs_executable_metadata()
+    }
 }
 
 /// Represents a time-based filter for files

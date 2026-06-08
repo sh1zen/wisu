@@ -392,6 +392,7 @@ impl TuiApp {
                         icon: Some("..".to_string()),
                         permissions: None,
                         connector: String::new(),
+                        is_executable: false,
                     },
                     expanded: false,
                 };

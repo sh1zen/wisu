@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] - 2026-06-08
+
+### Fixed
+
+- Improved performances
+
 ## [0.1.5] - 2026-01-14
 
 ### Added

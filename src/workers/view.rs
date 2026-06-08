@@ -124,7 +124,7 @@ pub fn print_tree(
             String::new()
         };
 
-        let styled_name = style_entry_name(entry.path(), ls_colors);
+        let styled_name = style_entry_name(entry.path(), c_info, ls_colors);
         let final_name = if args.hyperlinks && !c_info.is_directory {
             make_hyperlink(entry.path(), styled_name)
         } else {
@@ -147,14 +147,15 @@ pub fn print_tree(
 }
 
 #[inline]
-fn style_entry_name(path: &std::path::Path, ls_colors: &LsColors) -> colored::ColoredString {
+fn style_entry_name(
+    path: &std::path::Path,
+    entry_info: &tree::TreeEntry,
+    ls_colors: &LsColors,
+) -> colored::ColoredString {
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-    // safe metadata
-    let metadata = fs::metadata(path).ok();
-
     // Default color based on type/extension
-    let mut styled = default_entry_style(path, &name, metadata.as_ref());
+    let mut styled = default_entry_style(path, &name, entry_info);
 
     // LS colors always take precedence
     if let Some(ls_style) = ls_colors.style_for_path(path) {
@@ -195,11 +196,9 @@ fn style_root_path(path: &str) -> ColoredString {
 fn default_entry_style(
     path: &std::path::Path,
     name: &str,
-    metadata: Option<&fs::Metadata>,
+    entry_info: &tree::TreeEntry,
 ) -> ColoredString {
-    let Some(metadata) = metadata else { return name.normal() };
-
-    if metadata.is_dir() {
+    if entry_info.is_directory {
         #[cfg(target_os = "macos")]
         {
             return name.bright_cyan().bold();
@@ -210,7 +209,7 @@ fn default_entry_style(
         }
     }
 
-    if is_executable(path, metadata) {
+    if entry_info.is_executable {
         #[cfg(target_os = "macos")]
         {
             return name.bright_green();
@@ -326,26 +325,6 @@ fn is_text_extension(ext: &str) -> bool {
             | "zsh"
             | "fish"
     )
-}
-
-// Cross-platform function to check if a file is executable
-#[inline]
-fn is_executable(path: &std::path::Path, metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        let _ = path;
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = metadata;
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| matches!(ext.to_lowercase().as_str(), "exe" | "bat" | "cmd"))
-            .unwrap_or(false)
-    }
 }
 
 #[inline]

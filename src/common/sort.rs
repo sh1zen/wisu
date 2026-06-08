@@ -3,10 +3,9 @@
 //! This module implements various sorting strategies for file and directory entries,
 //! ensuring consistent behavior across all supported platforms (Windows, macOS, Linux).
 
-use ignore::DirEntry;
+use crate::common::entry::PreparedEntry;
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 /// Defines the available sorting strategies.
@@ -64,23 +63,12 @@ struct EntryCache {
 }
 
 impl EntryCache {
-    fn new(entry: &DirEntry, options: &SortOptions) -> Self {
-        let file_name = entry.file_name();
+    fn new(entry: &PreparedEntry, options: &SortOptions) -> Self {
+        let dir_entry = &entry.entry;
+        let file_name = dir_entry.file_name();
         let file_name_str = file_name.to_string_lossy().to_string();
         let is_dotfile = file_name_str.starts_with('.');
-        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
-
-        let metadata = entry.metadata().ok();
-        let (size, accessed, modified, created) = if let Some(m) = &metadata {
-            (
-                if is_dir { 0 } else { m.len() },
-                m.accessed().ok(),
-                m.modified().ok(),
-                m.created().ok(),
-            )
-        } else {
-            (0, None, None, None)
-        };
+        let is_dir = dir_entry.file_type().is_some_and(|ft| ft.is_dir());
 
         let extension = if options.sort_type == SortType::Extension {
             Path::new(&file_name_str).extension().and_then(|e| e.to_str()).map(|s| s.to_string())
@@ -91,10 +79,10 @@ impl EntryCache {
         Self {
             is_dir,
             is_dotfile,
-            size,
-            accessed,
-            created,
-            modified,
+            size: if is_dir { 0 } else { entry.metadata.size },
+            accessed: entry.metadata.accessed,
+            created: entry.metadata.created,
+            modified: entry.metadata.modified,
             extension,
             cached_name: file_name_str,
         }
@@ -102,7 +90,7 @@ impl EntryCache {
 }
 
 /// Sorts a slice of directory entries according to the given options.
-pub fn sort_entries(entries: &mut [DirEntry], options: &SortOptions) {
+pub fn sort_entries(entries: &mut [PreparedEntry], options: &SortOptions) {
     if entries.len() <= 1 {
         return;
     }
@@ -133,59 +121,80 @@ pub fn sort_entries(entries: &mut [DirEntry], options: &SortOptions) {
 }
 
 /// Sorts directory entries hierarchically, preserving tree structure.
-pub fn sort_entries_hierarchically(entries: &mut Vec<DirEntry>, options: &SortOptions) {
-    // Skip sorting if there's 0 or 1 entry.
+pub fn sort_entries_hierarchically(entries: &mut Vec<PreparedEntry>, options: &SortOptions) {
     if entries.len() <= 1 {
         return;
     }
 
-    let mut parent_to_children: HashMap<PathBuf, Vec<DirEntry>> =
-        HashMap::with_capacity(entries.len() / 2);
+    let cache: Vec<EntryCache> = entries.iter().map(|e| EntryCache::new(e, options)).collect();
+    let (mut root_indices, mut children_by_parent) = build_index_tree(entries.iter().map(|e| e.entry.depth()));
 
-    // Group entries by their parent directory.
-    for entry in entries.iter() {
-        if let Some(parent) = entry.path().parent() {
-            parent_to_children
-                .entry(parent.to_path_buf())
-                .or_insert_with(Vec::new)
-                .push(entry.clone());
-        }
+    sort_index_group(&mut root_indices, &cache, options);
+    for children in &mut children_by_parent {
+        sort_index_group(children, &cache, options);
     }
 
-    // Sort the children within each parent directory.
-    for children in parent_to_children.values_mut() {
-        sort_entries(children, options);
-    }
-
-    // Collect and sort all root-level entries (depth == 1).
-    let mut root_entries: Vec<_> =
-        entries.iter().filter(|entry| entry.depth() == 1).cloned().collect();
-
-    sort_entries(&mut root_entries, options);
-
-    // Rebuild the entries list in depth-first order starting from root nodes.
-    let mut sorted_entries = Vec::with_capacity(entries.len());
-    for root in &root_entries {
-        collect_tree_recursive(root, &parent_to_children, &mut sorted_entries);
-    }
-
-    // Replace the original entries with the sorted result.
-    *entries = sorted_entries;
+    let ordered_indices = collect_ordered_indices(&root_indices, &children_by_parent, entries.len());
+    reorder_vec_by_indices(entries, ordered_indices);
 }
 
 #[inline]
-fn collect_tree_recursive(
-    entry: &DirEntry,
-    children_map: &HashMap<PathBuf, Vec<DirEntry>>,
-    result: &mut Vec<DirEntry>,
-) {
-    result.push(entry.clone());
+fn sort_index_group(indices: &mut [usize], cache: &[EntryCache], options: &SortOptions) {
+    indices.sort_unstable_by(|&idx_a, &idx_b| {
+        let cmp = compare_entries_cached(&cache[idx_a], &cache[idx_b], options);
+        if options.reverse { cmp.reverse() } else { cmp }
+    });
+}
 
-    if let Some(children) = children_map.get(entry.path()) {
-        for child in children {
-            collect_tree_recursive(child, children_map, result);
+fn build_index_tree<I>(depths: I) -> (Vec<usize>, Vec<Vec<usize>>)
+where
+    I: IntoIterator<Item = usize>,
+{
+    let depths: Vec<usize> = depths.into_iter().collect();
+    let mut root_indices = Vec::new();
+    let mut children_by_parent: Vec<Vec<usize>> = (0..depths.len()).map(|_| Vec::new()).collect();
+    let mut ancestors_at_depth: Vec<usize> = Vec::new();
+
+    for (idx, depth) in depths.into_iter().enumerate() {
+        let parent_depth = depth.saturating_sub(1);
+        ancestors_at_depth.truncate(parent_depth);
+
+        if let Some(&parent_idx) = ancestors_at_depth.last() {
+            children_by_parent[parent_idx].push(idx);
+        } else {
+            root_indices.push(idx);
+        }
+
+        ancestors_at_depth.push(idx);
+    }
+
+    (root_indices, children_by_parent)
+}
+
+fn collect_ordered_indices(
+    root_indices: &[usize],
+    children_by_parent: &[Vec<usize>],
+    len: usize,
+) -> Vec<usize> {
+    let mut ordered_indices = Vec::with_capacity(len);
+    let mut stack: Vec<usize> = root_indices.iter().rev().copied().collect();
+
+    while let Some(idx) = stack.pop() {
+        ordered_indices.push(idx);
+        for &child_idx in children_by_parent[idx].iter().rev() {
+            stack.push(child_idx);
         }
     }
+
+    ordered_indices
+}
+
+fn reorder_vec_by_indices<T>(values: &mut Vec<T>, ordered_indices: Vec<usize>) {
+    let mut old_values: Vec<Option<T>> = std::mem::take(values).into_iter().map(Some).collect();
+    values.reserve(old_values.len());
+    values.extend(ordered_indices.into_iter().map(|idx| {
+        old_values[idx].take().expect("ordered indices must be unique and in bounds")
+    }));
 }
 
 #[inline]
@@ -290,12 +299,13 @@ fn compare_by_time(time_a: &Option<SystemTime>, time_b: &Option<SystemTime>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::entry::{CachedMetadata, PreparedEntry};
     use ignore::WalkBuilder;
     use std::fs::{self, File};
     use std::io::Write;
     use tempfile::tempdir;
 
-    fn collect_entries_from_temp(names: &[&str]) -> Vec<DirEntry> {
+    fn collect_entries_from_temp(names: &[&str]) -> Vec<PreparedEntry> {
         let dir = tempdir().unwrap();
         for name in names {
             let path = dir.path().join(name);
@@ -312,6 +322,7 @@ mod tests {
             .build()
             .filter_map(Result::ok)
             .filter(|e| e.depth() == 1) // Only immediate children
+            .map(|entry| PreparedEntry { entry, metadata: CachedMetadata::default() })
             .collect()
     }
 
@@ -323,7 +334,7 @@ mod tests {
 
         sort_entries(&mut entries, &options);
         let names: Vec<_> =
-            entries.iter().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+            entries.iter().map(|e| e.entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["Apple", "banana"]);
     }
 
@@ -335,7 +346,7 @@ mod tests {
 
         sort_entries(&mut entries, &options);
         let names: Vec<_> =
-            entries.iter().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+            entries.iter().map(|e| e.entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["Apple", "banana"]);
     }
 
@@ -347,7 +358,7 @@ mod tests {
 
         sort_entries(&mut entries, &options);
         let names: Vec<_> =
-            entries.iter().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+            entries.iter().map(|e| e.entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["b.b", "a.t", "c.T"]);
     }
 
@@ -359,7 +370,7 @@ mod tests {
 
         sort_entries(&mut entries, &options);
         let names: Vec<_> =
-            entries.iter().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+            entries.iter().map(|e| e.entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["c", "b", "a"]);
     }
 
@@ -373,7 +384,7 @@ mod tests {
         sort_entries(&mut entries, &options);
 
         let names: Vec<_> =
-            entries.iter().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+            entries.iter().map(|e| e.entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec![".hidden", "visible"]);
     }
 
@@ -385,8 +396,48 @@ mod tests {
 
         sort_entries(&mut entries, &options);
         let names: Vec<_> =
-            entries.iter().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+            entries.iter().map(|e| e.entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["dir", "file.txt"]);
+    }
+
+    #[test]
+    fn test_hierarchical_sort_reorders_only_siblings() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("b_dir")).unwrap();
+        fs::create_dir_all(dir.path().join("a_dir")).unwrap();
+        File::create(dir.path().join("b_dir").join("z.txt")).unwrap();
+        File::create(dir.path().join("a_dir").join("a.txt")).unwrap();
+
+        let mut entries: Vec<_> = WalkBuilder::new(dir.path())
+            .hidden(false)
+            .build()
+            .filter_map(Result::ok)
+            .filter(|e| e.depth() > 0)
+            .map(|entry| PreparedEntry { entry, metadata: CachedMetadata::default() })
+            .collect();
+
+        let options = SortOptions::default();
+        sort_entries_hierarchically(&mut entries, &options);
+
+        let ordered: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.entry.depth(),
+                    e.entry.file_name().to_string_lossy().to_string(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            ordered,
+            vec![
+                (1, "a_dir".to_string()),
+                (2, "a.txt".to_string()),
+                (1, "b_dir".to_string()),
+                (2, "z.txt".to_string()),
+            ]
+        );
     }
 
     #[test]
